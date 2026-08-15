@@ -1,0 +1,5 @@
+node_modules/
+dist/
+dsh-runtime/
+electron.zip
+*.log
