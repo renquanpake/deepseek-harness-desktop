@@ -32,3 +32,10 @@ npm run dist         # 打包安装程序（dist/ 目录）
 - `electron/main.js` — 主进程：窗口、托盘、快捷键、自启动、后端生命周期管理
 - `electron/backend.js` — 后端管理：spawn dsh / 端口轮询 / 进程树清理
 - `scripts/prepare-runtime.js` — 打包前准备 dsh-runtime/（把 dsh 及其依赖复制出来，用 Electron 自带 Node 运行，用户零安装）
+
+## 稳定性修复
+`scripts/patch-dsh-runtime.js`（随 `runtime:prepare` 自动运行）修复 dsh 内置 Win32 文件夹对话框的一个崩溃：
+
+- **现象**：点击「添加工作区」选完目录后报 `directory picker failed: win32 folder dialog worker exited before reporting a result`。
+- **根因**：`dsh-host-directory-picker-native` 的 `readUtf16` 用 `koffi.view(address, 32768)` 读取路径字符串。`koffi.view` 在 Windows 上把裸地址包进外部 ArrayBuffer，请求范围一旦跨过不可读页边界，koffi 会调 `napi_fatal_error` 直接 abort 进程（SIGABRT），worker 在返回结果前退出。
+- **修复**：改用 `lstrlenW`（C 层逐 2 字节走到 NUL，永不越界）取长度，再用 `memcpy` 把精确字节拷进 JS Buffer，完全不依赖 `koffi.view`。脚本幂等，重复运行安全。

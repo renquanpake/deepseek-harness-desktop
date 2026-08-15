@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "runtime:prepare": "node scripts/prepare-runtime.js",
+    "runtime:prepare": "node scripts/prepare-runtime.js && node scripts/patch-dsh-runtime.js",
     "dist": "npm run runtime:prepare && electron-builder --win",
     "dist:dir": "npm run runtime:prepare && electron-builder --win --dir"
   },
