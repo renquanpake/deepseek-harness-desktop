@@ -3,7 +3,10 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const URL = 'https://npmmirror.com/mirrors/electron/33.4.11/electron-v33.4.11-win32-x64.zip';
+// 版本从 package.json 读，避免与 devDependencies 漂移
+const pkg = require(path.join(__dirname, '..', 'package.json'));
+const VERSION = pkg.devDependencies.electron.replace(/^\^/, '');
+const URL = `https://npmmirror.com/mirrors/electron/${VERSION}/electron-v${VERSION}-win32-x64.zip`;
 const OUT = path.join(__dirname, 'electron.zip');
 
 function download(resume = 0) {
@@ -28,7 +31,7 @@ function download(resume = 0) {
         res.on('end', () => {
           fs.closeSync(fd);
           console.log(`done: ${(received / 1048576).toFixed(1)}MB`);
-          resolve(received);
+          resolve({ received, total });
         });
         res.on('error', (e) => { fs.closeSync(fd); reject(e); });
       } else {
@@ -42,14 +45,16 @@ function download(resume = 0) {
 
 (async () => {
   let got = fs.existsSync(OUT) ? fs.statSync(OUT).size : 0;
-  const TARGET = 109.6 * 1048576; // ~109.6MB
+  let TARGET = 0; // 第一次响应拿到 content-length 后固定
   let attempts = 0;
-  while (got < TARGET && attempts < 8) {
+  while (attempts < 8) {
     attempts++;
     console.log(`attempt ${attempts}, resume from ${(got / 1048576).toFixed(1)}MB`);
     try {
-      got = await download(got);
-      if (got >= TARGET * 0.99) break;
+      const { received, total } = await download(got);
+      got = received;
+      if (!TARGET) TARGET = total;
+      if (TARGET > 0 && got >= TARGET * 0.99) break;
     } catch (e) {
       console.log('  interrupted:', e.message);
       got = fs.existsSync(OUT) ? fs.statSync(OUT).size : 0;
