@@ -30,6 +30,16 @@ class DshBackend {
     return { mode: 'system-node', script: local };
   }
 
+  // 定位桌面端内嵌 profile（打包后在 resources/profiles，开发模式在项目根 profiles）
+  _resolveBundledProfile() {
+    const packaged = process.resourcesPath
+      ? path.join(process.resourcesPath, 'profiles')
+      : null;
+    if (packaged && fs.existsSync(packaged)) return packaged;
+    const dev = path.join(__dirname, '..', 'profiles');
+    return fs.existsSync(dev) ? dev : null;
+  }
+
   async start() {
     if (this.child) return; // 已在运行
     const entry = this._resolveDshEntry();
@@ -39,20 +49,29 @@ class DshBackend {
 
     this.log(`[backend] 启动 dsh web (${entry.mode}): ${entry.script}`);
 
+    // 用内嵌 profile 覆盖 DSH_HOME，避免用户系统 profile 缺依赖导致启动失败
+    const bundledProfile = this._resolveBundledProfile();
+    const baseEnv = { ...process.env };
+    if (bundledProfile) {
+      // DSH_HOME = profiles 的父目录（dsh 会在下面找 profiles/web/）
+      baseEnv.DSH_HOME = path.dirname(bundledProfile);
+      this.log(`[backend] DSH_HOME → ${baseEnv.DSH_HOME}`);
+    }
+
     if (entry.mode === 'electron-node') {
       // ELECTRON_RUN_AS_NODE=1 让 electron.exe 当纯 node 用，用户无需安装 Node
       // cwd 必须指向 runtime 根目录 (bin.js → lib → dsh → @deepseek-ai → node_modules → runtime)
       const runtimeDir = path.join(path.dirname(entry.script), '..', '..', '..', '..');
       this.child = spawn(process.execPath, ['--no-warnings', entry.script, 'web', '--host', this.host, '--port', String(this.port)], {
         cwd: runtimeDir,
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', NODE_ENV: 'production' },
+        env: { ...baseEnv, ELECTRON_RUN_AS_NODE: '1', NODE_ENV: 'production' },
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } else {
       const nodeBin = process.env.DSH_NODE_BIN || 'node';
       this.child = spawn(nodeBin, [entry.script, 'web', '--host', this.host, '--port', String(this.port)], {
-        env: { ...process.env, NODE_ENV: 'development' },
+        env: { ...baseEnv, NODE_ENV: 'development' },
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });

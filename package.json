@@ -37,6 +37,10 @@
       {
         "from": "dsh-runtime",
         "to": "dsh-runtime"
+      },
+      {
+        "from": "profiles",
+        "to": "profiles"
       }
     ],
     "win": {
