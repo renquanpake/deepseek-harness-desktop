@@ -2,13 +2,13 @@
   "name": "deepseek-harness-desktop",
   "version": "0.1.0",
   "description": "DeepSeek Harness 桌面端外壳 - 把 dsh WebUI 包成原生 Windows 应用",
-  "main": "electron/main.js",
+  "main": "main.js",
   "license": "MIT",
   "private": true,
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "runtime:prepare": "node scripts/prepare-runtime.js && node scripts/patch-dsh-runtime.js",
+    "runtime:prepare": "node prepare-runtime.js",
     "dist": "npm run runtime:prepare && electron-builder --win",
     "dist:dir": "npm run runtime:prepare && electron-builder --win --dir"
   },
@@ -21,50 +21,32 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "com.deepseek.harness.desktop",
-    "productName": "DeepSeek Harness Desktop",
-    "directories": {
-      "output": "dist",
-      "buildResources": "build"
-    },
-    "files": [
-      "electron/**/*",
-      "package.json"
+    "asar": true,
+    "asarUnpack": [
+      "dsh-runtime/"
     ],
-    "npmRebuild": false,
-    "electronVersion": "37.10.3",
-    "extraResources": [
-      {
-        "from": "dsh-runtime",
-        "to": "dsh-runtime"
-      },
-      {
-        "from": "profiles",
-        "to": "profiles"
-      }
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "assets/",
+      "dsh-runtime/"
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": [
-            "x64"
-          ]
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
         }
-      ],
-      "icon": "build/icon.ico"
+      ]
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "DeepSeek Harness",
-      "artifactName": "DeepSeek-Harness-Desktop-Setup-${version}.exe"
-    },
-    "publish": {
-      "provider": "generic",
-      "url": "http://127.0.0.1:8080/updates/"
+      "allowToChangeInstallationDirectory": true
     }
   }
 }
