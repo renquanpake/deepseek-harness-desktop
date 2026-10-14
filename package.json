@@ -24,7 +24,7 @@
   "build": {
     "asar": true,
     "asarUnpack": [
-      "dsh-runtime/"
+      "dsh-runtime/**"
     ],
     "files": [
       "main.js",
