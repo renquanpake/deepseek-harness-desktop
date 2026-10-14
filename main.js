@@ -237,6 +237,14 @@ function waitForBackendReady(timeoutMs = 30000) {
   });
 }
 
+async function restartWithCurrentConfig() {
+  startDshBackend();
+  await waitForBackendReady();
+  if (mainWindow) {
+    mainWindow.loadURL(`http://127.0.0.1:${currentPort}`);
+  }
+}
+
 function registerWindowsContextMenu() {
   if (process.platform !== 'win32') return false;
   const exePath = process.execPath;
@@ -476,6 +484,32 @@ ipcMain.on('dsh:native-notify', (_event, { title, body }) => {
     notice.show();
   }
 });
+
+ipcMain.handle('dsh:get-runtime-info', () => ({
+  port: currentPort,
+  engine: currentEngine,
+  safeMode: isSafeMode,
+  home: DSH_HOME
+}));
+
+ipcMain.handle('dsh:switch-engine', async (_event, mode) => {
+  if (mode !== 'win-native' && mode !== 'wsl2') {
+    throw new Error(`Unsupported engine mode: ${mode}`);
+  }
+  currentEngine = mode;
+  await restartWithCurrentConfig();
+  return { engine: currentEngine };
+});
+
+ipcMain.handle('dsh:restart-safe-mode', async () => {
+  isSafeMode = !isSafeMode;
+  await restartWithCurrentConfig();
+  return { safeMode: isSafeMode };
+});
+
+ipcMain.handle('dsh:register-context-menu', () => registerWindowsContextMenu());
+
+ipcMain.handle('dsh:unregister-context-menu', () => unregisterWindowsContextMenu());
 
 app.whenReady().then(async () => {
   handleCliWorkspaceArgs(process.argv);
