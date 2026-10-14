@@ -14,6 +14,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const http = require('http');
+const { toWslPath } = require('./lib/win-utils');
 
 let mainWindow = null;
 let dshProcess = null;
@@ -150,15 +151,6 @@ function killProcessTree() {
       process.kill(-pid, 'SIGKILL');
     }
   } catch {}
-}
-
-function toWslPath(winPath) {
-  const normalized = path.resolve(winPath).replace(/\\/g, '/');
-  const match = normalized.match(/^([a-zA-Z]):\/(.*)$/);
-  if (match) {
-    return `/mnt/${match[1].toLowerCase()}/${match[2]}`;
-  }
-  return normalized;
 }
 
 function startDshBackend(resetCrash = true) {
