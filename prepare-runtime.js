@@ -6,6 +6,7 @@ const ROOT_DIR = path.resolve(__dirname, fs.existsSync(path.join(__dirname, 'pac
 const RUNTIME_DIR = path.join(ROOT_DIR, 'dsh-runtime');
 const PRESET_PROFILE_DIR = path.join(RUNTIME_DIR, 'default-profile');
 const DSH_VERSION = process.env.DSH_VERSION || 'latest';
+const NPM_MIRROR_REGISTRY = 'https://registry.npmmirror.com';
 
 const PREINSTALL_PLUGINS = [
   'dsh-codex-ui',
@@ -39,8 +40,38 @@ function runCmd(cmd, cwd = RUNTIME_DIR, allowFail = false) {
   }
 }
 
+function copyBundledNode() {
+  console.log('[prepare-runtime] Bundling standalone console Node runtime to dsh-runtime/node.exe');
+  const source = process.execPath;
+  const target = path.join(RUNTIME_DIR, 'node.exe');
+  if (source === target) {
+    return;
+  }
+  try {
+    fs.copyFileSync(source, target);
+  } catch (err) {
+    console.warn(`[prepare-runtime] Warning: failed to bundle node.exe (${err.message}); falling back to ELECTRON_RUN_AS_NODE`);
+  }
+}
+
+function installBundledPnpm() {
+  console.log('[prepare-runtime] Bundling pnpm into dsh-runtime/node_modules/pnpm');
+  const pnpmPkg = path.join(RUNTIME_DIR, 'node_modules', 'pnpm');
+  if (fs.existsSync(path.join(pnpmPkg, 'bin', 'pnpm.cjs'))) return;
+  try {
+    fs.mkdirSync(RUNTIME_DIR, { recursive: true });
+    runCmd(
+      `npm install pnpm@latest --no-audit --no-fund --loglevel=error --registry=${NPM_MIRROR_REGISTRY}`,
+      RUNTIME_DIR,
+      true
+    );
+  } catch (err) {
+    console.warn(`[prepare-runtime] Warning: failed to bundle pnpm (${err.message})`);
+  }
+}
+
 function main() {
-  console.log('=== [1/4] Initializing dsh-runtime directory ===');
+  console.log('=== [1/5] Initializing dsh-runtime directory ===');
   if (fs.existsSync(RUNTIME_DIR)) {
     fs.rmSync(RUNTIME_DIR, { recursive: true, force: true });
   }
@@ -55,10 +86,19 @@ function main() {
   };
   fs.writeFileSync(path.join(RUNTIME_DIR, 'package.json'), JSON.stringify(runtimePkg, null, 2));
 
-  console.log(`=== [2/4] Installing @deepseek-ai/dsh@${DSH_VERSION} ===`);
-  runCmd(`npm install @deepseek-ai/dsh@${DSH_VERSION} --no-audit --no-fund --loglevel=error`, RUNTIME_DIR, false);
+  copyBundledNode();
 
-  console.log('=== [3/4] Pre-installing Open-Source Workbench Plugins into Preset Profile ===');
+  console.log(`=== [2/5] Bundling standalone node.exe and pnpm ===`);
+  installBundledPnpm();
+
+  console.log(`=== [3/5] Installing @deepseek-ai/dsh@${DSH_VERSION} via npmmirror ===`);
+  runCmd(
+    `npm install @deepseek-ai/dsh@${DSH_VERSION} --no-audit --no-fund --loglevel=error --registry=${NPM_MIRROR_REGISTRY}`,
+    RUNTIME_DIR,
+    false
+  );
+
+  console.log('=== [4/5] Pre-installing Open-Source Workbench Plugins into Preset Profile ===');
   const dshBin = path.join(
     RUNTIME_DIR,
     'node_modules',
@@ -82,12 +122,14 @@ function main() {
     }
   }
 
+  console.log('=== [4/5] Writing preset manifest ===');
+
   fs.writeFileSync(
     path.join(RUNTIME_DIR, 'preset-manifest.json'),
     JSON.stringify({ dshVersion: DSH_VERSION, plugins: PREINSTALL_PLUGINS, builtAt: new Date().toISOString() }, null, 2)
   );
 
-  console.log('=== [4/4] Runtime preparation completed successfully. ===');
+  console.log('=== [5/5] Runtime preparation completed successfully. ===');
 }
 
 main();

@@ -14,11 +14,23 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const http = require('http');
+const https = require('https');
+const stream = require('stream');
+const { promisify } = require('util');
 const { toWslPath } = require('./lib/win-utils');
 const { isBackendHttp } = require('./lib/trusted-url');
 const { decideRestart, MAX_CRASH_RESTARTS } = require('./lib/backend-lifecycle');
 const { pickWorkspaceMode } = require('./lib/cli-workspace');
 const { runRegCommands } = require('./lib/win-reg');
+const {
+  isNewer,
+  decideUpdatePlan,
+  formatUpdateDescription,
+  buildProxyedUrls,
+  pickInstallerUrl
+} = require('./lib/updater');
+
+const streamPipeline = promisify(stream.pipeline);
 
 let mainWindow = null;
 let dshProcess = null;
@@ -61,13 +73,49 @@ function resolveDshHome() {
 }
 
 const DSH_HOME = resolveDshHome();
+const LOCAL_RUNTIME_DIR = path.join(DSH_HOME, 'local-runtime');
 
-function getRuntimeDir() {
+function getBundledRuntimeDir() {
   const unpackedPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'dsh-runtime');
   if (fs.existsSync(unpackedPath)) return unpackedPath;
   const extraResPath = path.join(process.resourcesPath, 'dsh-runtime');
   if (fs.existsSync(extraResPath)) return extraResPath;
   return path.join(__dirname, 'dsh-runtime');
+}
+
+function getLocalRuntimeDshCli() {
+  return path.join(LOCAL_RUNTIME_DIR, 'node_modules', '@deepseek-ai', 'dsh', 'bin', 'dsh.mjs');
+}
+
+function isLocalRuntimeUsable() {
+  return fs.existsSync(getLocalRuntimeDshCli());
+}
+
+function getRuntimeDir() {
+  if (isLocalRuntimeUsable()) return LOCAL_RUNTIME_DIR;
+  return getBundledRuntimeDir();
+}
+
+function getBundledNodeExe() {
+  const bundledNode = path.join(getBundledRuntimeDir(), 'node.exe');
+  if (fs.existsSync(bundledNode)) return bundledNode;
+  return null;
+}
+
+function getBundledPnpmCjs() {
+  const pnpmCjs = path.join(getBundledRuntimeDir(), 'node_modules', 'pnpm', 'bin', 'pnpm.cjs');
+  if (fs.existsSync(pnpmCjs)) return pnpmCjs;
+  return null;
+}
+
+function getCurrentDshVersion() {
+  const pkgPath = path.join(getRuntimeDir(), 'node_modules', '@deepseek-ai', 'dsh', 'package.json');
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    return { version: pkg.version || 'unknown', source: isLocalRuntimeUsable() ? 'hot-update' : 'factory' };
+  } catch {
+    return { version: 'unknown', source: isLocalRuntimeUsable() ? 'hot-update' : 'factory' };
+  }
 }
 
 function assertTrustedSender(event) {
@@ -203,7 +251,7 @@ function startDshBackend(resetCrash = true) {
       '.bin',
       isWindows ? 'dsh.cmd' : 'dsh'
     );
-    const bundledNode = path.join(process.resourcesPath, 'node.exe');
+    const bundledNode = getBundledNodeExe();
     const commonSpawnOpts = {
       cwd: targetWorkspaceDir,
       env,
@@ -211,7 +259,7 @@ function startDshBackend(resetCrash = true) {
       windowsHide: true,
       detached: !isWindows
     };
-    if (isWindows && fs.existsSync(bundledNode) && fs.existsSync(dshCliJs)) {
+    if (bundledNode && fs.existsSync(dshCliJs)) {
       dshProcess = spawn(bundledNode, [dshCliJs, ...args], commonSpawnOpts);
     } else if (fs.existsSync(dshCmd)) {
       dshProcess = spawn(dshCmd, args, {
@@ -364,6 +412,412 @@ function unregisterWindowsContextMenu() {
   return runRegCommands(contextMenuUnregisterCommands(), regSync, warnReg);
 }
 
+const UPDATER = {
+  CORE_REGISTRY_URL: 'https://registry.npmmirror.com/@deepseek-ai/dsh/latest',
+  SHELL_MANIFEST_URLS: [
+    'https://fastly.jsdelivr.net/gh/renquanpake/deepseek-harness-desktop@main/package.json',
+    'https://ghfast.top/https://raw.githubusercontent.com/renquanpake/deepseek-harness-desktop/main/package.json',
+    'https://raw.githubusercontent.com/renquanpake/deepseek-harness-desktop/main/package.json'
+  ],
+  GITHUB_RELEASE_URLS: [
+    'https://api.github.com/repos/renquanpake/deepseek-harness-desktop/releases/latest',
+    'https://ghfast.top/https://api.github.com/repos/renquanpake/deepseek-harness-desktop/releases/latest'
+  ],
+  GITHUB_DOWNLOAD_PROXIES: [
+    'https://ghfast.top/',
+    'https://mirror.ghproxy.com/'
+  ],
+  REQUEST_TIMEOUT_MS: 5000,
+  DOWNLOAD_TIMEOUT_MS: 60000,
+  REGISTRY: 'https://registry.npmmirror.com',
+  isChecking: false
+};
+
+function httpGetJson(url, timeoutMs = UPDATER.REQUEST_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (value, error) => {
+      if (settled) return;
+      settled = true;
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const lib = url.startsWith('https:') ? https : http;
+    let req;
+    try {
+      req = lib.get(url, { headers: { 'User-Agent': 'deepseek-harness-desktop/1.0' } }, (res) => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          res.resume();
+          finish(null, new Error(`HTTP ${res.statusCode} for ${url}`));
+          return;
+        }
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          try {
+            const text = Buffer.concat(chunks).toString('utf8');
+            finish(JSON.parse(text));
+          } catch (err) {
+            finish(null, err);
+          }
+        });
+      });
+    } catch (err) {
+      finish(null, err);
+      return;
+    }
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`timeout after ${timeoutMs}ms`));
+    });
+    req.on('error', (err) => finish(null, err));
+  });
+}
+
+async function checkRemoteCoreVersion() {
+  try {
+    const data = await httpGetJson(UPDATER.CORE_REGISTRY_URL);
+    if (!data || !data.version) return null;
+    return data.version;
+  } catch {
+    return null;
+  }
+}
+
+async function checkRemoteShellVersion() {
+  for (const url of UPDATER.SHELL_MANIFEST_URLS) {
+    try {
+      const data = await httpGetJson(url);
+      if (data && data.version) return data.version;
+    } catch {
+      // try next mirror
+    }
+  }
+  return null;
+}
+
+async function checkRemoteReleaseAssets() {
+  for (const url of UPDATER.GITHUB_RELEASE_URLS) {
+    try {
+      const data = await httpGetJson(url);
+      if (data && data.assets && data.assets.length > 0) {
+        const installerUrl = pickInstallerUrl(data.assets);
+        if (installerUrl) {
+          return { tag: data.tag_name, installerUrl };
+        }
+      }
+    } catch {
+      // try next mirror
+    }
+  }
+  return null;
+}
+
+function setWindowProgress(title) {
+  if (mainWindow) mainWindow.setTitle(title);
+}
+
+function clearWindowProgress() {
+  if (mainWindow) mainWindow.setTitle(`DeepSeek Harness Studio — ${targetWorkspaceDir}`);
+}
+
+function getShellVersion() {
+  try {
+    return app.getVersion();
+  } catch {
+    return 'unknown';
+  }
+}
+
+function downloadWithProxies(url, destPath, onProgress) {
+  return new Promise((resolve, reject) => {
+    const candidates = buildProxyedUrls(url, UPDATER.GITHUB_DOWNLOAD_PROXIES);
+    let activeReq = null;
+    let activeWs = null;
+    let settled = false;
+    let attemptIndex = 0;
+
+    const attemptDownload = () => {
+      const currentUrl = candidates[attemptIndex];
+      if (!currentUrl) {
+        if (!settled) {
+          settled = true;
+          reject(new Error('All download mirrors exhausted'));
+        }
+        return;
+      }
+      const lib = currentUrl.startsWith('https:') ? https : http;
+      const file = fs.createWriteStream(destPath);
+      activeWs = file;
+
+      let req;
+      try {
+        req = lib.get(currentUrl, (res) => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            res.resume();
+            cleanupAndNext();
+            return;
+          }
+          const total = Number(res.headers['content-length'] || 0);
+          let received = 0;
+          res.on('data', (chunk) => {
+            received += chunk.length;
+            if (typeof onProgress === 'function' && total > 0) {
+              const percent = Math.min(99, Math.floor((received / total) * 100));
+              onProgress(percent, total, received);
+            }
+          });
+          res.pipe(file);
+        });
+      } catch (err) {
+        try { file.close(); } catch {}
+        cleanupAndNext();
+        return;
+      }
+      activeReq = req;
+      req.setTimeout(UPDATER.DOWNLOAD_TIMEOUT_MS, () => {
+        try { req.destroy(new Error('download timeout')); } catch {}
+      });
+      req.on('error', () => cleanupAndNext());
+      file.on('error', () => cleanupAndNext());
+      file.on('close', () => {
+        if (settled) return;
+        settled = true;
+        resolve(destPath);
+      });
+    };
+
+    const cleanupAndNext = () => {
+      try {
+        if (activeReq) activeReq.destroy();
+      } catch {}
+      try {
+        if (activeWs) activeWs.close();
+      } catch {}
+      try {
+        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+      } catch {}
+      attemptIndex += 1;
+      if (!settled) attemptDownload();
+    };
+
+    attemptDownload();
+  });
+}
+
+async function installHotUpdateCore(targetVersion) {
+  const nodeExe = getBundledNodeExe();
+  const pnpmCjs = getBundledPnpmCjs();
+  if (!nodeExe || !pnpmCjs) {
+    throw new Error('内置 node.exe 或 pnpm.cjs 缺失，无法执行内核热更新');
+  }
+  fs.mkdirSync(LOCAL_RUNTIME_DIR, { recursive: true });
+  const pkgJsonPath = path.join(LOCAL_RUNTIME_DIR, 'package.json');
+  if (!fs.existsSync(pkgJsonPath)) {
+    fs.writeFileSync(
+      pkgJsonPath,
+      JSON.stringify({ name: 'dsh-local-hot-update', version: '0.0.0', private: true }, null, 2)
+    );
+  }
+  setWindowProgress('正在通过国内镜像热更新 DSH 内核与插件...');
+  return new Promise((resolve, reject) => {
+    const pkgName = targetVersion
+      ? `@deepseek-ai/dsh@${targetVersion}`
+      : '@deepseek-ai/dsh@latest';
+    const args = [
+      pnpmCjs,
+      'add',
+      pkgName,
+      `--registry=${UPDATER.REGISTRY}`
+    ];
+    const pnpmProc = spawn(nodeExe, args, {
+      cwd: LOCAL_RUNTIME_DIR,
+      env: {
+        ...process.env,
+        DSH_HOME: LOCAL_RUNTIME_DIR,
+        NPM_CONFIG_REGISTRY: UPDATER.REGISTRY,
+        NPM_CONFIG_AUDIT: 'false',
+        NPM_CONFIG_FUND: 'false'
+      },
+      stdio: 'pipe',
+      windowsHide: true
+    });
+    let stderr = '';
+    pnpmProc.stdout.on('data', (chunk) => console.log(`[updater] ${String(chunk)}`));
+    pnpmProc.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+      console.warn(`[updater] ${String(chunk)}`);
+    });
+    pnpmProc.on('error', (err) => {
+      reject(new Error(`pnpm 启动失败: ${err.message}`));
+    });
+    pnpmProc.on('exit', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`pnpm 安装失败 (exit ${code}): ${stderr.slice(0, 500)}`));
+      }
+    });
+  });
+}
+
+function isPortable() {
+  const exeDir = path.dirname(app.getPath('exe'));
+  return fs.existsSync(path.join(exeDir, 'portable-data'));
+}
+
+async function revertToFactoryRuntime() {
+  if (fs.existsSync(LOCAL_RUNTIME_DIR)) {
+    try {
+      fs.rmSync(LOCAL_RUNTIME_DIR, { recursive: true, force: true });
+    } catch (err) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        title: '回退失败',
+        message: `删除 local-runtime 目录失败: ${err.message}`
+      });
+      return;
+    }
+  }
+  await restartWithCurrentConfig();
+  if (mainWindow) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: '已回退至出厂内置内核',
+      message: '本地热更新内核已清理，当前使用安装包自带的出厂 dsh-runtime。'
+    });
+  }
+}
+
+async function showUpdateCheckResult(hasUpdate, coreInfo, shellInfo, remoteCore, remoteShell) {
+  if (!hasUpdate) {
+    await dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: '检查更新',
+      message: '当前外壳与 DSH 官方内核均已是最新版本',
+      detail: `外壳版本：${shellInfo.current}\nDSH 内核版本：${coreInfo.current}（${coreInfo.source}）`,
+      buttons: ['关闭']
+    });
+    return;
+  }
+  const description = formatUpdateDescription({
+    core: { currentVersion: coreInfo.current, remoteVersion: remoteCore },
+    shell: { currentVersion: shellInfo.current, remoteVersion: remoteShell },
+    plan: { coreNeedsUpdate: coreInfo.needsUpdate, shellNeedsUpdate: shellInfo.needsUpdate }
+  });
+  const response = await dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: '检测到可用更新',
+    message: '发现可升级项，是否立即执行全自动更新？',
+    detail: description,
+    buttons: ['立即全自动更新', '稍后'],
+    defaultId: 0
+  });
+  return response.response === 0;
+}
+
+async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell) {
+  try {
+    if (coreInfo.needsUpdate) {
+      await installHotUpdateCore(remoteCore);
+    }
+
+    if (shellInfo.needsUpdate) {
+      const release = await checkRemoteReleaseAssets();
+      if (!release) {
+        dialog.showMessageBox(mainWindow, {
+          type: 'warning',
+          title: '外壳更新',
+          message: '无法获取最新外壳安装包下载地址，请稍后重试或手动下载安装包。'
+        });
+        clearWindowProgress();
+        return;
+      }
+      const tmpDir = os.tmpdir();
+      const installerName = `${path.basename(release.installerUrl).split('?')[0] || 'DeepSeek-Harness-Desktop-Setup.exe'}`;
+      const installerPath = path.join(tmpDir, installerName);
+      setWindowProgress('正在下载客户端外壳更新 (0%)...');
+      await downloadWithProxies(release.installerUrl, installerPath, (percent) => {
+        setWindowProgress(`正在下载客户端外壳更新 (${percent}%)...`);
+      });
+
+      if (isPortable()) {
+        const folder = path.dirname(installerPath);
+        shell.showItemInFolder(installerPath);
+        clearWindowProgress();
+        await dialog.showMessageBox(mainWindow, {
+          type: 'info',
+          title: '便携版更新',
+          message: '便携版更新已下载完成',
+          detail: `解压或覆盖 ${folder} 中的旧安装文件即可。用户数据保存在 portable-data 中，不会丢失。`
+        });
+      } else {
+        setWindowProgress('正在启动 NSIS 静默覆盖安装...');
+        try {
+          const installer = spawn(installerPath, ['/S'], { detached: true, stdio: 'ignore' });
+          installer.unref();
+        } catch (err) {
+          dialog.showErrorBox('NSIS 安装启动失败', String(err.message || err));
+        }
+        clearWindowProgress();
+        isQuitting = true;
+        setTimeout(() => app.quit(), 500);
+        return;
+      }
+    }
+
+    if (coreInfo.needsUpdate) {
+      await restartWithCurrentConfig();
+      clearWindowProgress();
+      await dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: '热更新成功',
+        message: `DSH 内核已热更新到 ${remoteCore}`,
+        detail: '后端已自动重启。若新版出现异常，可在「引擎与救援」→「⏪ 回退至出厂内置内核」一键回滚。'
+      });
+    }
+  } catch (err) {
+    clearWindowProgress();
+    dialog.showErrorBox('自动更新失败', String(err.message || err));
+  }
+}
+
+async function runUpdateCheck(silent = false) {
+  if (UPDATER.isChecking) return;
+  UPDATER.isChecking = true;
+  try {
+    const currentCore = getCurrentDshVersion();
+    const currentShell = getShellVersion();
+    const [remoteCore, remoteShell] = await Promise.all([
+      checkRemoteCoreVersion(),
+      checkRemoteShellVersion()
+    ]);
+    const coreInfo = {
+      current: currentCore.version,
+      source: currentCore.source === 'hot-update' ? '热更新内核' : '内置出厂内核',
+      needsUpdate: remoteCore && isNewer(remoteCore, currentCore.version)
+    };
+    const shellInfo = {
+      current: currentShell,
+      needsUpdate: remoteShell && isNewer(remoteShell, currentShell)
+    };
+    const plan = decideUpdatePlan({
+      core: { currentVersion: currentCore.version, remoteVersion: remoteCore },
+      shell: { currentVersion: currentShell, remoteVersion: remoteShell }
+    });
+    if (plan.hasUpdate) {
+      const confirmed = await showUpdateCheckResult(true, coreInfo, shellInfo, remoteCore, remoteShell);
+      if (confirmed) {
+        await performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell);
+      }
+    } else if (!silent) {
+      await showUpdateCheckResult(false, coreInfo, shellInfo, remoteCore, remoteShell);
+    }
+  } finally {
+    UPDATER.isChecking = false;
+  }
+}
+
+
 function buildNativeAppMenu() {
   const template = [
     {
@@ -417,6 +871,28 @@ function buildNativeAppMenu() {
     {
       label: '引擎与救援 (Engine & Rescue)',
       submenu: [
+        {
+          label: (() => {
+            const core = getCurrentDshVersion();
+            const sourceLabel = core.source === 'hot-update' ? '热更新内核' : '内置出厂内核';
+            return `外壳 v${getShellVersion()}  ·  DSH 内核 v${core.version} (${sourceLabel})`;
+          })(),
+          enabled: false
+        },
+        { type: 'separator' },
+        {
+          label: '🔄 检查更新 (自动联检内核与外壳)',
+          click: () => {
+            runUpdateCheck(false);
+          }
+        },
+        {
+          label: '⏪ 回退至出厂内置内核',
+          click: () => {
+            revertToFactoryRuntime();
+          }
+        },
+        { type: 'separator' },
         {
           label: '运行引擎：Windows 原生控制台 Node (推荐)',
           type: 'radio',
@@ -674,6 +1150,9 @@ app.whenReady().then(async () => {
       message: '后端未能就绪，当前显示空白页。可在「引擎与救援」菜单切换引擎或选择安全模式。'
     });
   }
+  setTimeout(() => {
+    if (!isQuitting) runUpdateCheck(true);
+  }, 5000);
 });
 
 app.on('before-quit', () => {
