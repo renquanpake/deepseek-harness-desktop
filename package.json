@@ -8,6 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "test": "node --test \"test/**/*.test.js\"",
     "runtime:prepare": "node prepare-runtime.js",
     "dist": "npm run runtime:prepare && electron-builder --win",
     "dist:dir": "npm run runtime:prepare && electron-builder --win --dir"
