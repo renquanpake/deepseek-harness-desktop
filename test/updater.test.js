@@ -57,6 +57,33 @@ test('buildProxyedUrls: chains prefixes and appends original', () => {
   ]);
 });
 
+test('buildProxyedUrls: handles prefix without trailing slash', () => {
+  const out = buildProxyedUrls('https://github.com/x/y.exe', [
+    'https://ghfast.top'
+  ]);
+  assert.deepStrictEqual(out, [
+    'https://ghfast.top/https://github.com/x/y.exe',
+    'https://github.com/x/y.exe'
+  ]);
+});
+
+test('buildProxyedUrls: handles relative baseUrl without double slash', () => {
+  const out = buildProxyedUrls('/foo/bar.exe', [
+    'https://ghfast.top/',
+    'https://ghfast.top'
+  ]);
+  assert.deepStrictEqual(out, [
+    'https://ghfast.top/foo/bar.exe',
+    'https://ghfast.top/foo/bar.exe',
+    '/foo/bar.exe'
+  ]);
+});
+
+test('buildProxyedUrls: empty proxy list returns original only', () => {
+  const out = buildProxyedUrls('https://example.com/x', []);
+  assert.deepStrictEqual(out, ['https://example.com/x']);
+});
+
 test('pickInstallerUrl: prefers non-portable .exe', () => {
   const assets = [
     { name: 'app-portable-1.0.0.exe', browser_download_url: 'https://x/portable.exe' },

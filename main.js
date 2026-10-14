@@ -528,23 +528,29 @@ function getShellVersion() {
   }
 }
 
-function downloadWithProxies(url, destPath, onProgress) {
+function downloadFromUrl(url, destPath, onProgress, maxRedirects = 5) {
   return new Promise((resolve, reject) => {
-    const candidates = buildProxyedUrls(url, UPDATER.GITHUB_DOWNLOAD_PROXIES);
+    let redirects = 0;
     let activeReq = null;
     let activeWs = null;
-    let settled = false;
-    let attemptIndex = 0;
+    let bodyReceived = false;
 
-    const attemptDownload = () => {
-      const currentUrl = candidates[attemptIndex];
-      if (!currentUrl) {
-        if (!settled) {
-          settled = true;
-          reject(new Error('All download mirrors exhausted'));
-        }
+    const cleanup = () => {
+      if (activeReq) {
+        try { activeReq.destroy(); } catch {}
+      }
+      if (activeWs) {
+        try { activeWs.close(); } catch {}
+      }
+    };
+
+    const fetch = (currentUrl) => {
+      if (redirects >= maxRedirects) {
+        reject(new Error('Too many redirects'));
         return;
       }
+      redirects += 1;
+
       const lib = currentUrl.startsWith('https:') ? https : http;
       const file = fs.createWriteStream(destPath);
       activeWs = file;
@@ -552,9 +558,17 @@ function downloadWithProxies(url, destPath, onProgress) {
       let req;
       try {
         req = lib.get(currentUrl, (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            res.resume();
+            cleanup();
+            const redirectUrl = new URL(res.headers.location, currentUrl).toString();
+            fetch(redirectUrl);
+            return;
+          }
           if (res.statusCode < 200 || res.statusCode >= 300) {
             res.resume();
-            cleanupAndNext();
+            cleanup();
+            reject(new Error(`HTTP ${res.statusCode} for ${currentUrl}`));
             return;
           }
           const total = Number(res.headers['content-length'] || 0);
@@ -566,38 +580,62 @@ function downloadWithProxies(url, destPath, onProgress) {
               onProgress(percent, total, received);
             }
           });
+          res.on('end', () => {
+            bodyReceived = true;
+          });
           res.pipe(file);
         });
       } catch (err) {
-        try { file.close(); } catch {}
-        cleanupAndNext();
+        cleanup();
+        reject(err);
         return;
       }
       activeReq = req;
       req.setTimeout(UPDATER.DOWNLOAD_TIMEOUT_MS, () => {
         try { req.destroy(new Error('download timeout')); } catch {}
       });
-      req.on('error', () => cleanupAndNext());
-      file.on('error', () => cleanupAndNext());
+      req.on('error', (err) => {
+        cleanup();
+        reject(err);
+      });
+      file.on('error', (err) => {
+        cleanup();
+        reject(err);
+      });
       file.on('close', () => {
-        if (settled) return;
-        settled = true;
-        resolve(destPath);
+        if (bodyReceived) {
+          resolve(destPath);
+        }
       });
     };
 
-    const cleanupAndNext = () => {
-      try {
-        if (activeReq) activeReq.destroy();
-      } catch {}
-      try {
-        if (activeWs) activeWs.close();
-      } catch {}
-      try {
-        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-      } catch {}
-      attemptIndex += 1;
-      if (!settled) attemptDownload();
+    fetch(url);
+  });
+}
+
+function downloadWithProxies(url, destPath, onProgress) {
+  return new Promise((resolve, reject) => {
+    const candidates = buildProxyedUrls(url, UPDATER.GITHUB_DOWNLOAD_PROXIES);
+    let attemptIndex = 0;
+    let settled = false;
+
+    const attemptDownload = () => {
+      if (settled) return;
+      const currentUrl = candidates[attemptIndex];
+      if (!currentUrl) {
+        settled = true;
+        reject(new Error('All download mirrors exhausted'));
+        return;
+      }
+      downloadFromUrl(currentUrl, destPath, onProgress)
+        .then(resolve)
+        .catch(() => {
+          try {
+            if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+          } catch {}
+          attemptIndex += 1;
+          attemptDownload();
+        });
     };
 
     attemptDownload();
@@ -633,7 +671,6 @@ async function installHotUpdateCore(targetVersion) {
       cwd: LOCAL_RUNTIME_DIR,
       env: {
         ...process.env,
-        DSH_HOME: LOCAL_RUNTIME_DIR,
         NPM_CONFIG_REGISTRY: UPDATER.REGISTRY,
         NPM_CONFIG_AUDIT: 'false',
         NPM_CONFIG_FUND: 'false'
@@ -642,15 +679,20 @@ async function installHotUpdateCore(targetVersion) {
       windowsHide: true
     });
     let stderr = '';
+    let settled = false;
     pnpmProc.stdout.on('data', (chunk) => console.log(`[updater] ${String(chunk)}`));
     pnpmProc.stderr.on('data', (chunk) => {
       stderr += String(chunk);
       console.warn(`[updater] ${String(chunk)}`);
     });
     pnpmProc.on('error', (err) => {
+      if (settled) return;
+      settled = true;
       reject(new Error(`pnpm 启动失败: ${err.message}`));
     });
     pnpmProc.on('exit', (code) => {
+      if (settled) return;
+      settled = true;
       if (code === 0) {
         resolve();
       } else {
@@ -730,50 +772,59 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell) {
           message: '无法获取最新外壳安装包下载地址，请稍后重试或手动下载安装包。'
         });
         clearWindowProgress();
-        return;
-      }
-      const tmpDir = os.tmpdir();
-      const installerName = `${path.basename(release.installerUrl).split('?')[0] || 'DeepSeek-Harness-Desktop-Setup.exe'}`;
-      const installerPath = path.join(tmpDir, installerName);
-      setWindowProgress('正在下载客户端外壳更新 (0%)...');
-      await downloadWithProxies(release.installerUrl, installerPath, (percent) => {
-        setWindowProgress(`正在下载客户端外壳更新 (${percent}%)...`);
-      });
-
-      if (isPortable()) {
-        const folder = path.dirname(installerPath);
-        shell.showItemInFolder(installerPath);
-        clearWindowProgress();
-        await dialog.showMessageBox(mainWindow, {
-          type: 'info',
-          title: '便携版更新',
-          message: '便携版更新已下载完成',
-          detail: `解压或覆盖 ${folder} 中的旧安装文件即可。用户数据保存在 portable-data 中，不会丢失。`
-        });
       } else {
-        setWindowProgress('正在启动 NSIS 静默覆盖安装...');
-        try {
-          const installer = spawn(installerPath, ['/S'], { detached: true, stdio: 'ignore' });
-          installer.unref();
-        } catch (err) {
-          dialog.showErrorBox('NSIS 安装启动失败', String(err.message || err));
+        const tmpDir = os.tmpdir();
+        const installerName = `${path.basename(release.installerUrl).split('?')[0] || 'DeepSeek-Harness-Desktop-Setup.exe'}`;
+        const installerPath = path.join(tmpDir, installerName);
+        setWindowProgress('正在下载客户端外壳更新 (0%)...');
+        await downloadWithProxies(release.installerUrl, installerPath, (percent) => {
+          setWindowProgress(`正在下载客户端外壳更新 (${percent}%)...`);
+        });
+
+        if (isPortable()) {
+          const folder = path.dirname(installerPath);
+          shell.showItemInFolder(installerPath);
+          clearWindowProgress();
+          await dialog.showMessageBox(mainWindow, {
+            type: 'info',
+            title: '便携版更新',
+            message: '便携版更新已下载完成',
+            detail: `解压或覆盖 ${folder} 中的旧安装文件即可。用户数据保存在 portable-data 中，不会丢失。`
+          });
+        } else {
+          setWindowProgress('正在启动 NSIS 静默覆盖安装...');
+          try {
+            const installer = spawn(installerPath, ['/S'], { detached: true, stdio: 'ignore' });
+            installer.unref();
+          } catch (err) {
+            dialog.showErrorBox('NSIS 安装启动失败', String(err.message || err));
+          }
+          clearWindowProgress();
+          isQuitting = true;
+          setTimeout(() => app.quit(), 500);
+          return;
         }
-        clearWindowProgress();
-        isQuitting = true;
-        setTimeout(() => app.quit(), 500);
-        return;
       }
     }
 
     if (coreInfo.needsUpdate) {
-      await restartWithCurrentConfig();
+      const ready = await restartWithCurrentConfig();
       clearWindowProgress();
-      await dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        title: '热更新成功',
-        message: `DSH 内核已热更新到 ${remoteCore}`,
-        detail: '后端已自动重启。若新版出现异常，可在「引擎与救援」→「⏪ 回退至出厂内置内核」一键回滚。'
-      });
+      if (ready) {
+        await dialog.showMessageBox(mainWindow, {
+          type: 'info',
+          title: '热更新成功',
+          message: `DSH 内核已热更新到 ${remoteCore}`,
+          detail: '后端已自动重启。若新版出现异常，可在「引擎与救援」→「⏪ 回退至出厂内置内核」一键回滚。'
+        });
+      } else {
+        await dialog.showMessageBox(mainWindow, {
+          type: 'warning',
+          title: '热更新完成但后端未就绪',
+          message: `DSH 内核已热更新到 ${remoteCore}，但后端未能就绪。`,
+          detail: '请在「引擎与救援」菜单检查引擎状态，或点击「⏪ 回退至出厂内置内核」回滚。'
+        });
+      }
     }
   } catch (err) {
     clearWindowProgress();
