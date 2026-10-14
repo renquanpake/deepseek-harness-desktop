@@ -15,6 +15,10 @@ const fs = require('fs');
 const os = require('os');
 const http = require('http');
 const { toWslPath } = require('./lib/win-utils');
+const { isBackendHttp } = require('./lib/trusted-url');
+const { decideRestart, MAX_CRASH_RESTARTS } = require('./lib/backend-lifecycle');
+const { pickWorkspaceMode } = require('./lib/cli-workspace');
+const { runRegCommands } = require('./lib/win-reg');
 
 let mainWindow = null;
 let dshProcess = null;
@@ -30,12 +34,17 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
+  app.on('second-instance', async (_event, argv) => {
+    if (!mainWindow) return;
+    const previousDir = targetWorkspaceDir;
+    handleCliWorkspaceArgs(Array.isArray(argv) && argv.length > 1 ? argv : process.argv);
+    if (targetWorkspaceDir !== previousDir) {
+      mainWindow.setTitle(`DeepSeek Harness Studio — ${targetWorkspaceDir}`);
+      await restartWithCurrentConfig();
     }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   });
 }
 
@@ -59,6 +68,13 @@ function getRuntimeDir() {
   const extraResPath = path.join(process.resourcesPath, 'dsh-runtime');
   if (fs.existsSync(extraResPath)) return extraResPath;
   return path.join(__dirname, 'dsh-runtime');
+}
+
+function assertTrustedSender(event) {
+  const frameUrl = event.senderFrame ? event.senderFrame.url : '';
+  if (!isBackendHttp(frameUrl, currentPort)) {
+    throw new Error(`Untrusted IPC sender: ${frameUrl}`);
+  }
 }
 
 function cleanStaleLocks(dirPath) {
@@ -107,17 +123,12 @@ function hydratePresetPluginsIfNeeded() {
 }
 
 function handleCliWorkspaceArgs(argv) {
-  for (let i = 1; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--open-dir' && argv[i + 1]) {
-      targetWorkspaceDir = path.resolve(argv[i + 1]);
-      break;
-    }
-    if (arg === '--worktree-dir' && argv[i + 1]) {
-      const baseDir = path.resolve(argv[i + 1]);
-      targetWorkspaceDir = createIsolatedGitWorktree(baseDir);
-      break;
-    }
+  const picked = pickWorkspaceMode(argv);
+  if (picked.mode === 'open-dir') {
+    targetWorkspaceDir = path.resolve(picked.value);
+  } else if (picked.mode === 'worktree-dir') {
+    const baseDir = path.resolve(picked.value);
+    targetWorkspaceDir = createIsolatedGitWorktree(baseDir);
   }
 }
 
@@ -142,7 +153,9 @@ function createIsolatedGitWorktree(repoDir) {
 
 function killProcessTree() {
   if (!dshProcess || !dshProcess.pid) return;
-  const pid = dshProcess.pid;
+  const proc = dshProcess;
+  proc.killedByUs = true;
+  const pid = proc.pid;
   dshProcess = null;
   try {
     if (process.platform === 'win32') {
@@ -212,19 +225,53 @@ function startDshBackend(resetCrash = true) {
       });
     }
   }
-  dshProcess.on('exit', (code) => {
-    dshProcess = null;
-    if (!isQuitting && code !== 0) {
-      crashCount += 1;
-      if (crashCount > 5) {
-        console.error('[dsh-watchdog] Backend crashed 5 times in a row, giving up on auto-restart.');
-        return;
+  const proc = dshProcess;
+
+  if (proc.stdout) {
+    proc.stdout.on('data', (chunk) => console.log(`[dsh] ${String(chunk)}`));
+  }
+  if (proc.stderr) {
+    proc.stderr.on('data', (chunk) => console.warn(`[dsh] ${String(chunk)}`));
+  }
+
+  proc.on('error', (err) => {
+    console.error(`[dsh-backend] Failed to spawn backend: ${err.message}`);
+    if (dshProcess === proc) {
+      dshProcess = null;
+    }
+    if (!isQuitting && mainWindow) {
+      dialog.showErrorBox('dsh 后端启动失败', String(err.message || err));
+    }
+  });
+
+  proc.on('exit', (code) => {
+    if (dshProcess === proc) {
+      dshProcess = null;
+    }
+    const decision = decideRestart({
+      isQuitting,
+      killedByUs: !!proc.killedByUs,
+      code,
+      failures: crashCount
+    });
+    crashCount = decision.failures;
+    if (decision.action === 'give-up') {
+      const msg = `[dsh-watchdog] Backend exited with code ${code} ${MAX_CRASH_RESTARTS + 1} times in a row. Auto-restart disabled — use the Engine menu to retry.`;
+      console.error(msg);
+      if (mainWindow) {
+        dialog.showMessageBox(mainWindow, {
+          type: 'error',
+          title: 'DSH Studio',
+          message: '后端连续崩溃，已停止自动重启。'
+        });
       }
-      const delay = Math.min(1500 * 2 ** (crashCount - 1), 15000);
-      console.warn(`[dsh-watchdog] Backend exited with code ${code}, auto-restarting in ${delay}ms (attempt ${crashCount}/5)...`);
+    } else if (decision.action === 'restart') {
+      console.warn(
+        `[dsh-watchdog] Backend exited with code ${code}, re-attempting in ${decision.delayMs}ms (streak ${decision.failures}).`
+      );
       setTimeout(() => {
         if (!isQuitting) startDshBackend(false);
-      }, delay);
+      }, decision.delayMs);
     }
   });
 }
@@ -252,9 +299,8 @@ function waitForBackendReady(timeoutMs = 30000) {
           setTimeout(check, 400);
         }
       });
-      req.setTimeout(timeoutMs, () => {
+      req.setTimeout(5000, () => {
         req.destroy();
-        finish(false);
       });
       req.end();
     };
@@ -264,58 +310,58 @@ function waitForBackendReady(timeoutMs = 30000) {
 
 async function restartWithCurrentConfig() {
   startDshBackend();
-  await waitForBackendReady();
+  const ready = await waitForBackendReady();
   if (mainWindow) {
     mainWindow.loadURL(`http://127.0.0.1:${currentPort}`);
+    buildNativeAppMenu();
   }
+  return ready;
 }
 
-function registerWindowsContextMenu() {
-  if (process.platform !== 'win32') return false;
-  const exePath = process.execPath;
-  const baseKeyBg = 'HKCU\\Software\\Classes\\Directory\\Background\\shell';
-  const baseKeyDir = 'HKCU\\Software\\Classes\\Directory\\shell';
-  const commands = [
-    `reg add "${baseKeyBg}\\DSHStudioOpen" /ve /d "Open with DeepSeek Harness Studio" /f`,
-    `reg add "${baseKeyBg}\\DSHStudioOpen" /v "Icon" /d "\\"${exePath}\\"" /f`,
-    `reg add "${baseKeyBg}\\DSHStudioOpen\\command" /ve /d "\\"${exePath}\\" --open-dir \\"%V\\"" /f`,
-    `reg add "${baseKeyDir}\\DSHStudioOpen" /ve /d "Open with DeepSeek Harness Studio" /f`,
-    `reg add "${baseKeyDir}\\DSHStudioOpen" /v "Icon" /d "\\"${exePath}\\"" /f`,
-    `reg add "${baseKeyDir}\\DSHStudioOpen\\command" /ve /d "\\"${exePath}\\" --open-dir \\"%1\\"" /f`,
-    `reg add "${baseKeyBg}\\DSHStudioWorktree" /ve /d "Open in New Git Worktree (DSH Studio)" /f`,
-    `reg add "${baseKeyBg}\\DSHStudioWorktree" /v "Icon" /d "\\"${exePath}\\"" /f`,
-    `reg add "${baseKeyBg}\\DSHStudioWorktree\\command" /ve /d "\\"${exePath}\\" --worktree-dir \\"%V\\"" /f`,
-    `reg add "${baseKeyDir}\\DSHStudioWorktree" /ve /d "Open in New Git Worktree (DSH Studio)" /f`,
-    `reg add "${baseKeyDir}\\DSHStudioWorktree" /v "Icon" /d "\\"${exePath}\\"" /f`,
-    `reg add "${baseKeyDir}\\DSHStudioWorktree\\command" /ve /d "\\"${exePath}\\" --worktree-dir \\"%1\\"" /f`
+const CONTEXT_MENU_COMMAND_KEY_BG = 'HKCU\\Software\\Classes\\Directory\\Background\\shell';
+const CONTEXT_MENU_COMMAND_KEY_DIR = 'HKCU\\Software\\Classes\\Directory\\shell';
+
+function contextMenuRegisterCommands(exePath) {
+  return [
+    `reg add "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen" /ve /d "Open with DeepSeek Harness Studio" /f`,
+    `reg add "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen" /v "Icon" /d "\\"${exePath}\\"" /f`,
+    `reg add "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen\\command" /ve /d "\\"${exePath}\\" --open-dir \\"%V\\"" /f`,
+    `reg add "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen" /ve /d "Open with DeepSeek Harness Studio" /f`,
+    `reg add "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen" /v "Icon" /d "\\"${exePath}\\"" /f`,
+    `reg add "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen\\command" /ve /d "\\"${exePath}\\" --open-dir \\"%1\\"" /f`,
+    `reg add "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree" /ve /d "Open in New Git Worktree (DSH Studio)" /f`,
+    `reg add "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree" /v "Icon" /d "\\"${exePath}\\"" /f`,
+    `reg add "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree\\command" /ve /d "\\"${exePath}\\" --worktree-dir \\"%V\\"" /f`,
+    `reg add "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree" /ve /d "Open in New Git Worktree (DSH Studio)" /f`,
+    `reg add "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree" /v "Icon" /d "\\"${exePath}\\"" /f`,
+    `reg add "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree\\command" /ve /d "\\"${exePath}\\" --worktree-dir \\"%1\\"" /f`
   ];
-  let written = 0;
-  for (const cmd of commands) {
-    try {
-      execSync(cmd, { windowsHide: true });
-      written += 1;
-    } catch (err) {
-      console.warn(`[reg-menu] Skipped key: ${cmd}\nReason: ${err.message}`);
-    }
+}
+
+function contextMenuUnregisterCommands() {
+  return [
+    `reg delete "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen" /f`,
+    `reg delete "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen" /f`,
+    `reg delete "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree" /f`,
+    `reg delete "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree" /f`
+  ];
+}
+
+const regSync = (cmd) => execSync(cmd, { windowsHide: true });
+const warnReg = (cmd, err) => console.warn(`[reg-menu] Skipped key: ${cmd}\nReason: ${err.message}`);
+
+function registerWindowsContextMenu() {
+  if (process.platform !== 'win32') {
+    return { ok: 0, failed: 0, total: 0 };
   }
-  if (written === 0) {
-    console.error('[reg-menu] No context menu keys could be written.');
-    return false;
-  }
-  return true;
+  return runRegCommands(contextMenuRegisterCommands(process.execPath), regSync, warnReg);
 }
 
 function unregisterWindowsContextMenu() {
-  if (process.platform !== 'win32') return false;
-  try {
-    execSync('reg delete "HKCU\\Software\\Classes\\Directory\\Background\\shell\\DSHStudioOpen" /f', { windowsHide: true });
-    execSync('reg delete "HKCU\\Software\\Classes\\Directory\\shell\\DSHStudioOpen" /f', { windowsHide: true });
-    execSync('reg delete "HKCU\\Software\\Classes\\Directory\\Background\\shell\\DSHStudioWorktree" /f', { windowsHide: true });
-    execSync('reg delete "HKCU\\Software\\Classes\\Directory\\shell\\DSHStudioWorktree" /f', { windowsHide: true });
-    return true;
-  } catch {
-    return false;
+  if (process.platform !== 'win32') {
+    return { ok: 0, failed: 0, total: 0 };
   }
+  return runRegCommands(contextMenuUnregisterCommands(), regSync, warnReg);
 }
 
 function buildNativeAppMenu() {
@@ -332,6 +378,9 @@ function buildNativeAppMenu() {
             });
             if (!res.canceled && res.filePaths[0]) {
               targetWorkspaceDir = createIsolatedGitWorktree(res.filePaths[0]);
+              if (mainWindow) {
+                mainWindow.setTitle(`DeepSeek Harness Studio — ${targetWorkspaceDir}`);
+              }
               await restartWithCurrentConfig();
             }
           }
@@ -382,6 +431,15 @@ function buildNativeAppMenu() {
           type: 'radio',
           checked: currentEngine === 'wsl2',
           click: async () => {
+            if (!isWindowsPlatform()) {
+              dialog.showMessageBox(mainWindow, {
+                type: 'warning',
+                title: 'DSH Studio',
+                message: 'WSL2 引擎仅在 Windows 主机上可用。'
+              });
+              currentEngine = 'win-native';
+              return;
+            }
             currentEngine = 'wsl2';
             await restartWithCurrentConfig();
           }
@@ -422,24 +480,41 @@ function buildNativeAppMenu() {
         {
           label: '注册右键菜单 (Open with DSH / New Git Worktree)',
           click: () => {
-            const ok = registerWindowsContextMenu();
+            const result = registerWindowsContextMenu();
+            if (result.total === 0) {
+              dialog.showMessageBox(mainWindow, {
+                type: 'warning',
+                title: '右键菜单集成',
+                message: '右键菜单注册仅在 Windows 主机上可用。'
+              });
+              return;
+            }
+            const ok = result.failed === 0;
             dialog.showMessageBox(mainWindow, {
-              type: ok ? 'info' : 'error',
+              type: ok ? 'info' : 'warning',
               title: '右键菜单集成',
               message: ok
-                ? '注册成功！现在可在任意文件夹右键选择「Open in New Git Worktree (DSH Studio)」。'
-                : '注册失败，请检查系统权限。'
+                ? `注册成功（${result.ok}/${result.total}）！现在可在任意文件夹右键选择「Open in New Git Worktree (DSH Studio)」。`
+                : `部分成功（${result.ok}/${result.total}），${result.failed} 项写入失败，请检查系统权限。`
             });
           }
         },
         {
           label: '移除右键菜单',
           click: () => {
-            unregisterWindowsContextMenu();
+            const result = unregisterWindowsContextMenu();
+            if (result.total === 0) {
+              dialog.showMessageBox(mainWindow, {
+                type: 'warning',
+                title: '右键菜单集成',
+                message: '右键菜单移除仅在 Windows 主机上可用。'
+              });
+              return;
+            }
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: '右键菜单集成',
-              message: '已移除 Windows 资源管理器右键菜单项。'
+              message: `已尝试移除 ${result.total} 组资源管理器右键菜单项（成功 ${result.ok}，跳过 ${result.failed}）。`
             });
           }
         },
@@ -461,6 +536,28 @@ function buildNativeAppMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+function isWindowsPlatform() {
+  return process.platform === 'win32';
+}
+
+function registerRelayShortcut() {
+  const preferred = 'Alt+Space';
+  const ok = globalShortcut.register(preferred, toggleMainWindowVisibility);
+  if (ok) return;
+  console.warn(`[main] Global shortcut ${preferred} is occupied by the system; falling back to CommandOrControl+Alt+D.`);
+  globalShortcut.register('CommandOrControl+Alt+D', toggleMainWindowVisibility);
+}
+
+function toggleMainWindowVisibility() {
+  if (!mainWindow) return;
+  if (mainWindow.isVisible() && mainWindow.isFocused()) {
+    mainWindow.hide();
+  } else {
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -478,21 +575,33 @@ function createMainWindow() {
   });
   buildNativeAppMenu();
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) {
+    if (isBackendHttp(url, currentPort)) {
       return { action: 'allow' };
     }
     shell.openExternal(url);
     return { action: 'deny' };
   });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isBackendHttp(url, currentPort)) return;
+    event.preventDefault();
+    shell.openExternal(url);
+  });
   mainWindow.on('close', (event) => {
-    if (!isQuitting && process.platform === 'win32') {
+    if (!isQuitting && isWindowsPlatform()) {
       event.preventDefault();
       mainWindow.hide();
     }
   });
 }
 
-ipcMain.on('dsh:native-notify', (_event, { title, body }) => {
+ipcMain.on('dsh:native-notify', (event, payload) => {
+  try {
+    assertTrustedSender(event);
+  } catch (err) {
+    console.warn(`[ipc] native-notify rejected: ${err.message}`);
+    return;
+  }
+  const { title, body } = payload || {};
   if (mainWindow && !mainWindow.isFocused()) {
     mainWindow.flashFrame(true);
   }
@@ -509,49 +618,61 @@ ipcMain.on('dsh:native-notify', (_event, { title, body }) => {
   }
 });
 
-ipcMain.handle('dsh:get-runtime-info', () => ({
-  port: currentPort,
-  engine: currentEngine,
-  safeMode: isSafeMode,
-  home: DSH_HOME
-}));
+ipcMain.handle('dsh:get-runtime-info', (event) => {
+  assertTrustedSender(event);
+  return {
+    port: currentPort,
+    engine: currentEngine,
+    safeMode: isSafeMode,
+    home: DSH_HOME,
+    workspace: targetWorkspaceDir
+  };
+});
 
-ipcMain.handle('dsh:switch-engine', async (_event, mode) => {
+ipcMain.handle('dsh:switch-engine', async (event, mode) => {
+  assertTrustedSender(event);
   if (mode !== 'win-native' && mode !== 'wsl2') {
     throw new Error(`Unsupported engine mode: ${mode}`);
+  }
+  if (mode === 'wsl2' && process.platform !== 'win32') {
+    throw new Error('wsl2 engine is only available on Windows hosts');
   }
   currentEngine = mode;
   await restartWithCurrentConfig();
   return { engine: currentEngine };
 });
 
-ipcMain.handle('dsh:restart-safe-mode', async () => {
+ipcMain.handle('dsh:restart-safe-mode', async (event) => {
+  assertTrustedSender(event);
   isSafeMode = !isSafeMode;
   await restartWithCurrentConfig();
   return { safeMode: isSafeMode };
 });
 
-ipcMain.handle('dsh:register-context-menu', () => registerWindowsContextMenu());
+ipcMain.handle('dsh:register-context-menu', (event) => {
+  assertTrustedSender(event);
+  const result = registerWindowsContextMenu();
+  return result.total > 0 && result.failed === 0;
+});
 
-ipcMain.handle('dsh:unregister-context-menu', () => unregisterWindowsContextMenu());
+ipcMain.handle('dsh:unregister-context-menu', (event) => {
+  assertTrustedSender(event);
+  const result = unregisterWindowsContextMenu();
+  return result.total > 0 && result.failed === 0;
+});
 
 app.whenReady().then(async () => {
   if (!gotLock) return;
   handleCliWorkspaceArgs(process.argv);
   createMainWindow();
-  startDshBackend();
-  globalShortcut.register('Alt+Space', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isVisible() && mainWindow.isFocused()) {
-      mainWindow.hide();
-    } else {
-      mainWindow.show();
-      mainWindow.focus();
-    }
-  });
-  await waitForBackendReady();
-  if (mainWindow) {
-    mainWindow.loadURL(`http://127.0.0.1:${currentPort}`);
+  registerRelayShortcut();
+  const ready = await restartWithCurrentConfig();
+  if (!ready && mainWindow) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: 'DSH Studio',
+      message: '后端未能就绪，当前显示空白页。可在「引擎与救援」菜单切换引擎或选择安全模式。'
+    });
   }
 });
 
@@ -562,7 +683,7 @@ app.on('before-quit', () => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  if (process.platform !== 'darwin' || !isWindowsPlatform()) {
     isQuitting = true;
     killProcessTree();
     app.quit();
