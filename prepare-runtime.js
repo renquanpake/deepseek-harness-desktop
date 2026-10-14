@@ -122,14 +122,14 @@ function main() {
     }
   }
 
-  console.log('=== [4/5] Writing preset manifest ===');
+  console.log('=== [5/5] Writing preset manifest and finalizing ===');
 
   fs.writeFileSync(
     path.join(RUNTIME_DIR, 'preset-manifest.json'),
     JSON.stringify({ dshVersion: DSH_VERSION, plugins: PREINSTALL_PLUGINS, builtAt: new Date().toISOString() }, null, 2)
   );
 
-  console.log('=== [5/5] Runtime preparation completed successfully. ===');
+  console.log('Runtime preparation completed successfully.');
 }
 
 main();
