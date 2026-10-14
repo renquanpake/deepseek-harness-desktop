@@ -240,17 +240,29 @@ function startDshBackend(resetCrash = true) {
 function waitForBackendReady(timeoutMs = 30000) {
   const start = Date.now();
   return new Promise((resolve) => {
+    let done = false;
+    const finish = (value) => {
+      if (!done) {
+        done = true;
+        resolve(value);
+      }
+    };
     const check = () => {
+      if (done) return;
       const req = http.get(`http://127.0.0.1:${currentPort}`, (res) => {
         res.resume();
-        resolve(true);
+        finish(true);
       });
       req.on('error', () => {
         if (Date.now() - start > timeoutMs) {
-          resolve(false);
+          finish(false);
         } else {
           setTimeout(check, 400);
         }
+      });
+      req.setTimeout(timeoutMs, () => {
+        req.destroy();
+        finish(false);
       });
       req.end();
     };
@@ -269,26 +281,36 @@ async function restartWithCurrentConfig() {
 function registerWindowsContextMenu() {
   if (process.platform !== 'win32') return false;
   const exePath = process.execPath;
-  try {
-    const baseKeyBg = 'HKCU\\Software\\Classes\\Directory\\Background\\shell';
-    const baseKeyDir = 'HKCU\\Software\\Classes\\Directory\\shell';
-    execSync(`reg add "${baseKeyBg}\\DSHStudioOpen" /ve /d "Open with DeepSeek Harness Studio" /f`, { windowsHide: true });
-    execSync(`reg add "${baseKeyBg}\\DSHStudioOpen" /v "Icon" /d "\\"${exePath}\\"" /f`, { windowsHide: true });
-    execSync(`reg add "${baseKeyBg}\\DSHStudioOpen\\command" /ve /d "\\"${exePath}\\" --open-dir \\"%V\\"" /f`, { windowsHide: true });
-    execSync(`reg add "${baseKeyDir}\\DSHStudioOpen" /ve /d "Open with DeepSeek Harness Studio" /f`, { windowsHide: true });
-    execSync(`reg add "${baseKeyDir}\\DSHStudioOpen" /v "Icon" /d "\\"${exePath}\\"" /f`, { windowsHide: true });
-    execSync(`reg add "${baseKeyDir}\\DSHStudioOpen\\command" /ve /d "\\"${exePath}\\" --open-dir \\"%1\\"" /f`, { windowsHide: true });
-    execSync(`reg add "${baseKeyBg}\\DSHStudioWorktree" /ve /d "Open in New Git Worktree (DSH Studio)" /f`, { windowsHide: true });
-    execSync(`reg add "${baseKeyBg}\\DSHStudioWorktree" /v "Icon" /d "\\"${exePath}\\"" /f`, { windowsHide: true });
-    execSync(`reg add "${baseKeyBg}\\DSHStudioWorktree\\command" /ve /d "\\"${exePath}\\" --worktree-dir \\"%V\\"" /f`, { windowsHide: true });
-    execSync(`reg add "${baseKeyDir}\\DSHStudioWorktree" /ve /d "Open in New Git Worktree (DSH Studio)" /f`, { windowsHide: true });
-    execSync(`reg add "${baseKeyDir}\\DSHStudioWorktree" /v "Icon" /d "\\"${exePath}\\"" /f`, { windowsHide: true });
-    execSync(`reg add "${baseKeyDir}\\DSHStudioWorktree\\command" /ve /d "\\"${exePath}\\" --worktree-dir \\"%1\\"" /f`, { windowsHide: true });
-    return true;
-  } catch (err) {
-    console.error('[reg-menu] Failed:', err.message);
+  const baseKeyBg = 'HKCU\\Software\\Classes\\Directory\\Background\\shell';
+  const baseKeyDir = 'HKCU\\Software\\Classes\\Directory\\shell';
+  const commands = [
+    `reg add "${baseKeyBg}\\DSHStudioOpen" /ve /d "Open with DeepSeek Harness Studio" /f`,
+    `reg add "${baseKeyBg}\\DSHStudioOpen" /v "Icon" /d "\\"${exePath}\\"" /f`,
+    `reg add "${baseKeyBg}\\DSHStudioOpen\\command" /ve /d "\\"${exePath}\\" --open-dir \\"%V\\"" /f`,
+    `reg add "${baseKeyDir}\\DSHStudioOpen" /ve /d "Open with DeepSeek Harness Studio" /f`,
+    `reg add "${baseKeyDir}\\DSHStudioOpen" /v "Icon" /d "\\"${exePath}\\"" /f`,
+    `reg add "${baseKeyDir}\\DSHStudioOpen\\command" /ve /d "\\"${exePath}\\" --open-dir \\"%1\\"" /f`,
+    `reg add "${baseKeyBg}\\DSHStudioWorktree" /ve /d "Open in New Git Worktree (DSH Studio)" /f`,
+    `reg add "${baseKeyBg}\\DSHStudioWorktree" /v "Icon" /d "\\"${exePath}\\"" /f`,
+    `reg add "${baseKeyBg}\\DSHStudioWorktree\\command" /ve /d "\\"${exePath}\\" --worktree-dir \\"%V\\"" /f`,
+    `reg add "${baseKeyDir}\\DSHStudioWorktree" /ve /d "Open in New Git Worktree (DSH Studio)" /f`,
+    `reg add "${baseKeyDir}\\DSHStudioWorktree" /v "Icon" /d "\\"${exePath}\\"" /f`,
+    `reg add "${baseKeyDir}\\DSHStudioWorktree\\command" /ve /d "\\"${exePath}\\" --worktree-dir \\"%1\\"" /f`
+  ];
+  let written = 0;
+  for (const cmd of commands) {
+    try {
+      execSync(cmd, { windowsHide: true });
+      written += 1;
+    } catch (err) {
+      console.warn(`[reg-menu] Skipped key: ${cmd}\nReason: ${err.message}`);
+    }
+  }
+  if (written === 0) {
+    console.error('[reg-menu] No context menu keys could be written.');
     return false;
   }
+  return true;
 }
 
 function unregisterWindowsContextMenu() {
@@ -318,9 +340,7 @@ function buildNativeAppMenu() {
             });
             if (!res.canceled && res.filePaths[0]) {
               targetWorkspaceDir = createIsolatedGitWorktree(res.filePaths[0]);
-              startDshBackend();
-              await waitForBackendReady();
-              mainWindow.loadURL(`http://127.0.0.1:${currentPort}`);
+              await restartWithCurrentConfig();
             }
           }
         },
@@ -362,9 +382,7 @@ function buildNativeAppMenu() {
           checked: currentEngine === 'win-native',
           click: async () => {
             currentEngine = 'win-native';
-            startDshBackend();
-            await waitForBackendReady();
-            mainWindow.loadURL(`http://127.0.0.1:${currentPort}`);
+            await restartWithCurrentConfig();
           }
         },
         {
@@ -373,9 +391,7 @@ function buildNativeAppMenu() {
           checked: currentEngine === 'wsl2',
           click: async () => {
             currentEngine = 'wsl2';
-            startDshBackend();
-            await waitForBackendReady();
-            mainWindow.loadURL(`http://127.0.0.1:${currentPort}`);
+            await restartWithCurrentConfig();
           }
         },
         { type: 'separator' },
@@ -385,9 +401,7 @@ function buildNativeAppMenu() {
           checked: isSafeMode,
           click: async (item) => {
             isSafeMode = item.checked;
-            startDshBackend();
-            await waitForBackendReady();
-            mainWindow.loadURL(`http://127.0.0.1:${currentPort}`);
+            await restartWithCurrentConfig();
           }
         },
         {
@@ -396,9 +410,7 @@ function buildNativeAppMenu() {
           checked: useChinaMirror,
           click: async (item) => {
             useChinaMirror = item.checked;
-            startDshBackend();
-            await waitForBackendReady();
-            mainWindow.loadURL(`http://127.0.0.1:${currentPort}`);
+            await restartWithCurrentConfig();
           }
         },
         {
@@ -407,9 +419,7 @@ function buildNativeAppMenu() {
             const markerFile = path.join(DSH_HOME, '.codex-studio-hydrated');
             if (fs.existsSync(markerFile)) fs.unlinkSync(markerFile);
             hydratePresetPluginsIfNeeded();
-            startDshBackend();
-            await waitForBackendReady();
-            mainWindow.reload();
+            await restartWithCurrentConfig();
           }
         }
       ]
