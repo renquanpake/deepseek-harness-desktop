@@ -24,6 +24,19 @@ let isSafeMode = false;
 let useChinaMirror = false;
 let targetWorkspaceDir = process.cwd();
 
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
 function resolveDshHome() {
   const exeDir = path.dirname(app.getPath('exe'));
   const portableDir = path.join(exeDir, 'portable-data');
@@ -449,7 +462,8 @@ function createMainWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      sandbox: true
     }
   });
   buildNativeAppMenu();
@@ -512,6 +526,7 @@ ipcMain.handle('dsh:register-context-menu', () => registerWindowsContextMenu());
 ipcMain.handle('dsh:unregister-context-menu', () => unregisterWindowsContextMenu());
 
 app.whenReady().then(async () => {
+  if (!gotLock) return;
   handleCliWorkspaceArgs(process.argv);
   createMainWindow();
   startDshBackend();
