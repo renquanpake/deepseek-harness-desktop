@@ -17,6 +17,7 @@ const http = require('http');
 
 let mainWindow = null;
 let dshProcess = null;
+let crashCount = 0;
 let isQuitting = false;
 let currentPort = 3080;
 let currentEngine = 'win-native';
@@ -160,10 +161,13 @@ function toWslPath(winPath) {
   return normalized;
 }
 
-function startDshBackend() {
+function startDshBackend(resetCrash = true) {
   killProcessTree();
   cleanStaleLocks(DSH_HOME);
   hydratePresetPluginsIfNeeded();
+  if (resetCrash) {
+    crashCount = 0;
+  }
   const runtimeDir = getRuntimeDir();
   const args = ['web', '--port', String(currentPort)];
   if (isSafeMode) {
@@ -177,7 +181,8 @@ function startDshBackend() {
   if (useChinaMirror) {
     env.NPM_CONFIG_REGISTRY = 'https://registry.npmmirror.com';
   }
-  if (currentEngine === 'wsl2' && process.platform === 'win32') {
+  const isWindows = process.platform === 'win32';
+  if (currentEngine === 'wsl2' && isWindows) {
     const wslWorkspace = toWslPath(targetWorkspaceDir);
     const safeFlag = isSafeMode ? '--safe-mode' : '';
     const wslCmd = `cd "${wslWorkspace}" && npx --yes @deepseek-ai/dsh web --port ${currentPort} ${safeFlag}`;
@@ -191,40 +196,43 @@ function startDshBackend() {
       runtimeDir,
       'node_modules',
       '.bin',
-      process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
+      isWindows ? 'dsh.cmd' : 'dsh'
     );
     const bundledNode = path.join(process.resourcesPath, 'node.exe');
-    if (process.platform === 'win32' && fs.existsSync(bundledNode) && fs.existsSync(dshCliJs)) {
-      dshProcess = spawn(bundledNode, [dshCliJs, ...args], {
-        cwd: targetWorkspaceDir,
-        env,
-        stdio: 'pipe',
-        windowsHide: true
-      });
+    const commonSpawnOpts = {
+      cwd: targetWorkspaceDir,
+      env,
+      stdio: 'pipe',
+      windowsHide: true,
+      detached: !isWindows
+    };
+    if (isWindows && fs.existsSync(bundledNode) && fs.existsSync(dshCliJs)) {
+      dshProcess = spawn(bundledNode, [dshCliJs, ...args], commonSpawnOpts);
     } else if (fs.existsSync(dshCmd)) {
       dshProcess = spawn(dshCmd, args, {
-        cwd: targetWorkspaceDir,
-        env,
-        shell: process.platform === 'win32',
-        stdio: 'pipe',
-        windowsHide: true
+        ...commonSpawnOpts,
+        shell: isWindows
       });
     } else {
       dshProcess = spawn('npx', ['--yes', '@deepseek-ai/dsh', ...args], {
-        cwd: targetWorkspaceDir,
-        env,
-        shell: process.platform === 'win32',
-        stdio: 'pipe',
-        windowsHide: true
+        ...commonSpawnOpts,
+        shell: isWindows
       });
     }
   }
   dshProcess.on('exit', (code) => {
+    dshProcess = null;
     if (!isQuitting && code !== 0) {
-      console.warn(`[dsh-watchdog] Backend exited with code ${code}, auto-restarting in 1.5s...`);
+      crashCount += 1;
+      if (crashCount > 5) {
+        console.error('[dsh-watchdog] Backend crashed 5 times in a row, giving up on auto-restart.');
+        return;
+      }
+      const delay = Math.min(1500 * 2 ** (crashCount - 1), 15000);
+      console.warn(`[dsh-watchdog] Backend exited with code ${code}, auto-restarting in ${delay}ms (attempt ${crashCount}/5)...`);
       setTimeout(() => {
-        if (!isQuitting) startDshBackend();
-      }, 1500);
+        if (!isQuitting) startDshBackend(false);
+      }, delay);
     }
   });
 }
