@@ -2,6 +2,8 @@ const {
   app,
   BrowserWindow,
   Menu,
+  Tray,
+  nativeImage,
   globalShortcut,
   ipcMain,
   Notification,
@@ -34,13 +36,14 @@ const {
 const streamPipeline = promisify(stream.pipeline);
 
 let mainWindow = null;
+let tray = null;
 let dshProcess = null;
 let crashCount = 0;
 let isQuitting = false;
 let currentPort = 3080;
 let currentEngine = 'win-native';
 let isSafeMode = false;
-let useChinaMirror = true;
+const useChinaMirror = true;
 let targetWorkspaceDir = process.cwd();
 let targetWorkspaceIsWorktree = false;
 
@@ -193,6 +196,11 @@ function isLocalRuntimeAvailable() {
   if (forceBundledRuntime || Date.now() < localRuntimeBrokenUntil) {
     return false;
   }
+  try {
+    if (fs.existsSync(path.join(LOCAL_RUNTIME_DIR, '.broken-marker.json'))) {
+      return false;
+    }
+  } catch {}
   return isLocalRuntimeUsable();
 }
 
@@ -225,7 +233,7 @@ function prependPathDirs(existingPath, extraDirs) {
 }
 
 function currentRegistryUrl() {
-  return useChinaMirror ? UPDATER.REGISTRY : 'https://registry.npmjs.org/';
+  return UPDATER.REGISTRY + '/';
 }
 
 function buildBackendEnv() {
@@ -251,8 +259,12 @@ function buildBackendEnv() {
   }
   const binDirs = getRuntimeBinDirs();
   if (binDirs.length) {
-    const pathKey = Object.keys(env).find((key) => key.toUpperCase() === 'PATH') || 'PATH';
-    env[pathKey] = prependPathDirs(env[pathKey] || '', binDirs);
+    const rawPath = env.PATH || env.Path || process.env.PATH || process.env.Path || '';
+    const updatedPath = prependPathDirs(rawPath, binDirs);
+    env.PATH = updatedPath;
+    if (isWindowsPlatform()) {
+      env.Path = updatedPath;
+    }
   }
   return env;
 }
@@ -264,8 +276,15 @@ function getBundledNodeExe() {
 }
 
 function getBundledPnpmCjs() {
-  const pnpmCjs = path.join(getBundledRuntimeDir(), 'node_modules', 'pnpm', 'bin', 'pnpm.cjs');
-  if (fs.existsSync(pnpmCjs)) return pnpmCjs;
+  const runtimeDir = getBundledRuntimeDir();
+  const candidates = [
+    path.join(runtimeDir, 'pnpm.cjs'),
+    path.join(runtimeDir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'),
+    path.join(runtimeDir, 'node_modules', 'pnpm', 'dist', 'pnpm.cjs')
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
   return null;
 }
 
@@ -862,7 +881,10 @@ function unregisterWindowsContextMenu() {
 }
 
 const UPDATER = {
-  CORE_REGISTRY_URL: 'https://registry.npmmirror.com/@deepseek-ai/dsh/latest',
+  CORE_REGISTRY_URLS: [
+    'https://registry.npmmirror.com/@deepseek-ai/dsh/latest',
+    'https://registry.npmjs.org/@deepseek-ai/dsh/latest'
+  ],
   SHELL_MANIFEST_URLS: [
     'https://fastly.jsdelivr.net/gh/renquanpake/deepseek-harness-desktop@main/package.json',
     'https://ghfast.top/https://raw.githubusercontent.com/renquanpake/deepseek-harness-desktop/main/package.json',
@@ -876,63 +898,86 @@ const UPDATER = {
     'https://ghfast.top/',
     'https://mirror.ghproxy.com/'
   ],
-  REQUEST_TIMEOUT_MS: 5000,
+  REQUEST_TIMEOUT_MS: 8000,
   DOWNLOAD_TIMEOUT_MS: 60000,
   REGISTRY: 'https://registry.npmmirror.com',
   isChecking: false
 };
 
-function httpGetJson(url, timeoutMs = UPDATER.REQUEST_TIMEOUT_MS) {
+function httpGetJson(url, timeoutMs = UPDATER.REQUEST_TIMEOUT_MS, redirects = 0) {
   return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (value, error) => {
-      if (settled) return;
-      settled = true;
-      if (error) reject(error);
-      else resolve(value);
-    };
-    const lib = url.startsWith('https:') ? https : http;
-    let req;
+    if (redirects > 8) {
+      return reject(new Error('Too many redirects (exceeded 8) for ' + url));
+    }
+    let parsed;
     try {
-      req = lib.get(url, { headers: { 'User-Agent': 'deepseek-harness-desktop/1.0' } }, (res) => {
+      parsed = new URL(url);
+    } catch (e) {
+      return reject(e);
+    }
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.get(
+      url,
+      {
+        headers: {
+          'User-Agent': 'deepseek-harness-desktop/1.0 (Windows NT 10.0; Win64; x64)',
+          'Accept': 'application/json, text/plain, */*'
+        }
+      },
+      (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          const nextUrl = new URL(res.headers.location, url).toString();
+          res.resume();
+          return resolve(httpGetJson(nextUrl, timeoutMs, redirects + 1));
+        }
         if (res.statusCode < 200 || res.statusCode >= 300) {
           res.resume();
-          finish(null, new Error(`HTTP ${res.statusCode} for ${url}`));
-          return;
+          return reject(new Error('HTTP ' + res.statusCode + ' for ' + url));
         }
-        const chunks = [];
-        res.on('data', (chunk) => chunks.push(chunk));
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { data += chunk; });
         res.on('end', () => {
           try {
-            const text = Buffer.concat(chunks).toString('utf8');
-            finish(JSON.parse(text));
+            resolve(JSON.parse(data));
           } catch (err) {
-            finish(null, err);
+            reject(err);
           }
         });
-      });
-    } catch (err) {
-      finish(null, err);
-      return;
-    }
+      }
+    );
+    req.on('error', reject);
     req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error(`timeout after ${timeoutMs}ms`));
+      req.destroy();
+      reject(new Error('Request timeout (' + timeoutMs + 'ms) for ' + url));
     });
-    req.on('error', (err) => finish(null, err));
   });
 }
 
 async function checkRemoteCoreVersion() {
-  try {
-    const data = await httpGetJson(UPDATER.CORE_REGISTRY_URL);
-    if (!data || !data.version) return null;
-    return data.version;
-  } catch {
-    return null;
+  for (const url of UPDATER.CORE_REGISTRY_URLS) {
+    try {
+      const data = await httpGetJson(url);
+      if (data && data.version) return data.version;
+    } catch {
+      // try next mirror
+    }
   }
+  return null;
 }
 
 async function checkRemoteShellVersion() {
+  for (const url of UPDATER.GITHUB_RELEASE_URLS) {
+    try {
+      const data = await httpGetJson(url);
+      if (data && data.tag_name) {
+        const version = String(data.tag_name).replace(/^v/, '');
+        if (version) return version;
+      }
+    } catch {
+      // try next mirror
+    }
+  }
   for (const url of UPDATER.SHELL_MANIFEST_URLS) {
     try {
       const data = await httpGetJson(url);
@@ -989,9 +1034,11 @@ function readJsonSafe(filePath) {
 function readFactoryPresetPluginNames() {
   const runtimeDir = getBundledRuntimeDir();
   const manifest = readJsonSafe(path.join(runtimeDir, 'preset-manifest.json'));
+  const preinstalled = readJsonSafe(path.join(runtimeDir, 'preinstalled-plugins.json'));
   const factoryPkg = readJsonSafe(path.join(runtimeDir, 'package.json'));
   const names = [
     ...(Array.isArray(manifest.plugins) ? manifest.plugins : []),
+    ...(Array.isArray(preinstalled.plugins) ? preinstalled.plugins : []),
     ...Object.keys((factoryPkg && factoryPkg.dependencies) || {})
   ];
   const deduped = [...new Set(names.filter((name) => typeof name === 'string' && name.trim() && !name.startsWith('@deepseek-ai/dsh')))];
@@ -1086,6 +1133,8 @@ function runPnpmAdd(nodeExe, pnpmCjs, packages) {
 }
 
 async function installHotUpdateCore(targetVersion) {
+  console.log('[hot-update] 开始更新 DSH 内核至 ' + targetVersion);
+  killProcessTree();
   const nodeExe = getBundledNodeExe();
   const pnpmCjs = getBundledPnpmCjs();
   if (!nodeExe || !pnpmCjs) {
@@ -1108,22 +1157,25 @@ async function installHotUpdateCore(targetVersion) {
     throw new Error('DSH 内核热更新失败，请检查网络或稍后重试');
   }
   const presetPluginNames = readFactoryPresetPluginNames();
-  if (!presetPluginNames.length) return;
-  const added = mergeLocalRuntimePresetDependencies(presetPluginNames);
-  if (!added.length) return;
-  setWindowProgress(`正在同步出厂预置插件（${presetPluginNames.length} 项）...`);
-  const pluginsInstalled = await runPnpmAdd(nodeExe, pnpmCjs, added.map((name) => `${name}@*`));
-  const missing = added.filter((name) => !isPresetPluginInstalled(name));
-  if (missing.length) {
-    pruneLocalRuntimeDependencies(missing);
+  if (presetPluginNames.length) {
+    const added = mergeLocalRuntimePresetDependencies(presetPluginNames);
+    if (added.length) {
+      setWindowProgress(`正在同步出厂预置插件（${presetPluginNames.length} 项）...`);
+      const pluginsInstalled = await runPnpmAdd(nodeExe, pnpmCjs, added.map((name) => `${name}@*`));
+      const missing = added.filter((name) => !isPresetPluginInstalled(name));
+      if (missing.length) {
+        pruneLocalRuntimeDependencies(missing);
+      }
+      if (!pluginsInstalled || missing.length) {
+        console.warn(
+          `[updater] 出厂预置插件未全部保留（插件仍由 default-profile 预置包提供）；` +
+            `已安装 ${presetPluginNames.length - missing.length}/${added.length}，` +
+            `已从 local-runtime 清单移除不可安装的插件：${missing.join(', ') || '（无）'}`
+        );
+      }
+    }
   }
-  if (!pluginsInstalled || missing.length) {
-    console.warn(
-      `[updater] 出厂预置插件未全部保留（插件仍由 default-profile 预置包提供）；` +
-        `已安装 ${presetPluginNames.length - missing.length}/${added.length}，` +
-        `已从 local-runtime 清单移除不可安装的插件：${missing.join(', ') || '（无）'}`
-    );
-  }
+  startDshBackend();
 }
 
 function cleanupOldBrokenRuntimeDirs(keepCount = 2) {
@@ -1187,31 +1239,42 @@ async function showUpdateCheckResult(hasUpdate, coreInfo, shellInfo, remoteCore,
     await dialog.showMessageBox(mainWindow, {
       type: 'info',
       title: '检查更新',
-      message: '当前外壳与 DSH 官方内核均已是最新版本',
-      detail: `外壳版本：${shellInfo.current}\nDSH 内核版本：${coreInfo.current}（${coreInfo.source}）`,
+      message: '当前已是最新状态！',
+      detail: `- DSH 官方内核版本：v${coreInfo.current} (最新)\n- 桌面外壳版本：v${shellInfo.current} (最新)`,
       buttons: ['关闭']
     });
-    return;
+    return null;
   }
-  const description = formatUpdateDescription({
-    core: { currentVersion: coreInfo.current, remoteVersion: remoteCore },
-    shell: { currentVersion: shellInfo.current, remoteVersion: remoteShell },
-    plan: { coreNeedsUpdate: coreInfo.needsUpdate, shellNeedsUpdate: shellInfo.needsUpdate }
-  });
+  const coreTag = coreInfo.needsUpdate ? '[可更新]' : '[已最新]';
+  const shellTag = shellInfo.needsUpdate ? '[可更新]' : '[已最新]';
+  const detail = `检测到可用更新：\n- DSH 官方内核：v${coreInfo.current} -> v${remoteCore || '未知'} ${coreTag}\n- 桌面宿主外壳：v${shellInfo.current} -> v${remoteShell || '未知'} ${shellTag}\n\n是否立即自动下载并更新？`;
+  let buttons;
+  if (coreInfo.needsUpdate && shellInfo.needsUpdate) {
+    buttons = ['立即一键更新', '仅更新 DSH 内核', '取消'];
+  } else {
+    buttons = ['立即更新', '取消'];
+  }
   const response = await dialog.showMessageBox(mainWindow, {
-    type: 'info',
+    type: 'question',
     title: '检测到可用更新',
-    message: '发现可升级项，是否立即执行全自动更新？',
-    detail: description,
-    buttons: ['立即全自动更新', '稍后'],
-    defaultId: 0
+    message: '发现可升级项，是否立即执行自动更新？',
+    detail,
+    buttons,
+    defaultId: 0,
+    cancelId: buttons.length - 1
   });
-  return response.response === 0;
+  if (response.response === 0) {
+    return { updateCore: true, updateShell: true };
+  }
+  if (response.response === 1 && buttons.length === 3) {
+    return { updateCore: true, updateShell: false };
+  }
+  return null;
 }
 
-async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell) {
+async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, options = { updateCore: true, updateShell: true }) {
   try {
-    if (coreInfo.needsUpdate) {
+    if (coreInfo.needsUpdate && options.updateCore) {
       forceBundledRuntime = false;
       localRuntimeBrokenUntil = 0;
       clearLocalRuntimeWatchdog();
@@ -1219,7 +1282,7 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell) {
       cleanupOldBrokenRuntimeDirs(2);
     }
 
-    if (shellInfo.needsUpdate) {
+    if (shellInfo.needsUpdate && options.updateShell) {
       const release = await checkRemoteReleaseAssets();
       if (!release) {
         dialog.showMessageBox(mainWindow, {
@@ -1249,6 +1312,14 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell) {
           });
         } else {
           setWindowProgress('正在启动 NSIS 静默覆盖安装...');
+          killProcessTree();
+          try {
+            if (typeof app.releaseSingleInstanceLock === 'function') {
+              app.releaseSingleInstanceLock();
+            }
+          } catch (lockErr) {
+            console.warn(`[shell-update] 释放单实例锁失败: ${lockErr.message}`);
+          }
           try {
             const installer = spawn(installerPath, ['/S'], { detached: true, stdio: 'ignore' });
             installer.unref();
@@ -1263,7 +1334,7 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell) {
       }
     }
 
-    if (coreInfo.needsUpdate) {
+    if (coreInfo.needsUpdate && options.updateCore) {
       const ready = await restartWithCurrentConfig();
       clearWindowProgress();
       if (ready) {
@@ -1301,20 +1372,20 @@ async function runUpdateCheck(silent = false) {
     const coreInfo = {
       current: currentCore.version,
       source: currentCore.source === 'hot-update' ? '热更新内核' : '内置出厂内核',
-      needsUpdate: remoteCore && isNewer(remoteCore, currentCore.version)
+      needsUpdate: !!(remoteCore && isNewer(remoteCore, currentCore.version))
     };
     const shellInfo = {
       current: currentShell,
-      needsUpdate: remoteShell && isNewer(remoteShell, currentShell)
+      needsUpdate: !!(remoteShell && isNewer(remoteShell, currentShell))
     };
     const plan = decideUpdatePlan({
       core: { currentVersion: currentCore.version, remoteVersion: remoteCore },
       shell: { currentVersion: currentShell, remoteVersion: remoteShell }
     });
     if (plan.hasUpdate) {
-      const confirmed = await showUpdateCheckResult(true, coreInfo, shellInfo, remoteCore, remoteShell);
-      if (confirmed) {
-        await performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell);
+      const options = await showUpdateCheckResult(true, coreInfo, shellInfo, remoteCore, remoteShell);
+      if (options) {
+        await performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, options);
       }
     } else if (!silent) {
       await showUpdateCheckResult(false, coreInfo, shellInfo, remoteCore, remoteShell);
@@ -1324,6 +1395,70 @@ async function runUpdateCheck(silent = false) {
   }
 }
 
+
+function getTrayIconPath() {
+  const candidates = [
+    path.join(__dirname, 'build', 'icon.png'),
+    path.join(__dirname, 'electron', 'assets', 'icon.png'),
+    path.join(process.resourcesPath, 'icon.png'),
+    path.join(process.resourcesPath, 'build', 'icon.png')
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {}
+  }
+  return null;
+}
+
+function createTray() {
+  if (tray) return;
+  const iconPath = getTrayIconPath();
+  if (!iconPath) {
+    console.warn('[tray] No tray icon found, skipping tray creation');
+    return;
+  }
+  try {
+    const icon = nativeImage.createFromPath(iconPath);
+    if (icon.isEmpty()) {
+      console.warn('[tray] Tray icon is empty, skipping tray creation');
+      return;
+    }
+    tray = new Tray(icon);
+    const menu = Menu.buildFromTemplate([
+      {
+        label: '显示主窗口',
+        click: () => {
+          if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+          }
+        }
+      },
+      {
+        label: '检查更新',
+        click: () => runUpdateCheck(false)
+      },
+      { type: 'separator' },
+      {
+        label: '退出 DSH Studio',
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        }
+      }
+    ]);
+    tray.setContextMenu(menu);
+    tray.on('click', () => {
+      if (mainWindow) {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    });
+  } catch (err) {
+    console.warn(`[tray] Failed to create tray: ${err.message}`);
+  }
+}
 
 function buildNativeAppMenu() {
   const template = [
@@ -1432,15 +1567,6 @@ function buildNativeAppMenu() {
           checked: isSafeMode,
           click: async (item) => {
             isSafeMode = item.checked;
-            await restartWithCurrentConfig();
-          }
-        },
-        {
-          label: '启用国内 npm 镜像源加速插件安装',
-          type: 'checkbox',
-          checked: useChinaMirror,
-          click: async (item) => {
-            useChinaMirror = item.checked;
             await restartWithCurrentConfig();
           }
         },
@@ -1730,10 +1856,16 @@ ipcMain.handle('dsh:get-workspace-status', (event) => {
   };
 });
 
+ipcMain.handle('dsh:check-update', () => {
+  runUpdateCheck(false);
+  return { ok: true };
+});
+
 app.whenReady().then(async () => {
   if (!gotLock) return;
   handleCliWorkspaceArgs(process.argv);
   createMainWindow();
+  createTray();
   registerRelayShortcut();
   const ready = await restartWithCurrentConfig();
   if (!ready && mainWindow) {
