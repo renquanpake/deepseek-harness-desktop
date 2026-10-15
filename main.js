@@ -40,18 +40,127 @@ let isQuitting = false;
 let currentPort = 3080;
 let currentEngine = 'win-native';
 let isSafeMode = false;
-let useChinaMirror = false;
+let useChinaMirror = true;
 let targetWorkspaceDir = process.cwd();
+let targetWorkspaceIsWorktree = false;
+
+const DSH_PORTABLE_MARKER_DIR = 'portable-data';
+const LOCAL_RUNTIME_WATCHDOG_MS = 15000;
+const WATCHDOG_BACKEND_PROBE_MS = 5000;
+const WATCHDOG_LOAD_FAILURE_THRESHOLD = 2;
+const LOCAL_RUNTIME_BROKEN_WINDOW_MS = 6 * 60 * 60 * 1000;
+const WORKTREE_PROCESS_SCAN_TIMEOUT_MS = 4000;
+const GIT_WORKTREE_COMMAND_TIMEOUT_MS = 30000;
+const GIT_WORKTREE_ADD_TIMEOUT_MS = 180000;
+
+let PORTABLE_DATA_ROOT = null;
+let PORTABLE_APPDATA = null;
+let PORTABLE_LOCALAPPDATA = null;
+let PORTABLE_USERPROFILE = null;
+let useLocalRuntime = false;
+let forceBundledRuntime = false;
+let localRuntimeBrokenUntil = 0;
+let exitRestartSuppressedFor = null;
+let watchedRuntimeExitCode = null;
+let localRuntimeSpawnError = null;
+let watchdogTimer = null;
+let backendLoadFailures = 0;
+let worktreeCloseDialogShowing = false;
+const activeWorktreeSession = { worktreePath: null, repoPath: null, branchName: null };
+
+function resolvePortableDataRoot() {
+  const declaredExeDir = process.env.PORTABLE_EXECUTABLE_DIR;
+  const exeDir = path.dirname(app.getPath('exe'));
+  const candidates = [];
+  if (declaredExeDir && path.resolve(declaredExeDir) !== path.resolve(exeDir)) {
+    candidates.push(path.join(declaredExeDir, DSH_PORTABLE_MARKER_DIR));
+  }
+  candidates.push(path.join(exeDir, DSH_PORTABLE_MARKER_DIR));
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+        return candidate;
+      }
+    } catch {}
+  }
+  if (declaredExeDir) {
+    const portableRoot = path.join(path.resolve(declaredExeDir), DSH_PORTABLE_MARKER_DIR);
+    try {
+      fs.mkdirSync(portableRoot, { recursive: true });
+      return portableRoot;
+    } catch {}
+  }
+  return null;
+}
+
+function ensurePortableSubDir(name) {
+  if (!PORTABLE_DATA_ROOT) return null;
+  try {
+    const target = path.join(PORTABLE_DATA_ROOT, name);
+    fs.mkdirSync(target, { recursive: true });
+    return target;
+  } catch (err) {
+    console.warn(`[portable] 创建便携数据子目录失败 ${name}: ${err.message}`);
+    return null;
+  }
+}
+
+function ensurePortableGitConfig() {
+  if (!PORTABLE_DATA_ROOT || process.platform !== 'win32') return;
+  const portableGitConfig = path.join(PORTABLE_DATA_ROOT, 'home', '.gitconfig');
+  if (fs.existsSync(portableGitConfig)) return;
+  const systemGitConfig = path.join(os.homedir(), '.gitconfig');
+  let content = '';
+  try {
+    if (fs.existsSync(systemGitConfig)) {
+      content = `[include]\n\tpath = "${systemGitConfig}"\n`;
+    }
+  } catch {
+    return;
+  }
+  if (!content) return;
+  try {
+    fs.writeFileSync(portableGitConfig, content);
+  } catch (err) {
+    console.warn(`[portable] 写入便携 .gitconfig 失败: ${err.message}`);
+  }
+}
+
+function resolveDshHome() {
+  PORTABLE_DATA_ROOT = resolvePortableDataRoot();
+  if (PORTABLE_DATA_ROOT) {
+    try {
+      fs.mkdirSync(PORTABLE_DATA_ROOT, { recursive: true });
+      PORTABLE_APPDATA = ensurePortableSubDir('appdata-roaming');
+      PORTABLE_LOCALAPPDATA = ensurePortableSubDir('appdata-local');
+      PORTABLE_USERPROFILE = ensurePortableSubDir('userprofile');
+      ensurePortableSubDir('home');
+      ensurePortableSubDir('temp-captures');
+      ensurePortableGitConfig();
+      app.setPath('userData', path.join(PORTABLE_DATA_ROOT, 'electron-userdata'));
+      return path.join(PORTABLE_DATA_ROOT, '.dsh');
+    } catch (err) {
+      console.warn(`[portable] 便携数据根目录不可写，回退至用户主目录: ${err.message}`);
+      PORTABLE_DATA_ROOT = null;
+      PORTABLE_APPDATA = null;
+      PORTABLE_LOCALAPPDATA = null;
+      PORTABLE_USERPROFILE = null;
+    }
+  }
+  return path.join(os.homedir(), '.dsh');
+}
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', async (_event, argv) => {
+  app.on('second-instance', async (event, argv) => {
     if (!mainWindow) return;
-    const previousDir = targetWorkspaceDir;
-    handleCliWorkspaceArgs(Array.isArray(argv) && argv.length > 1 ? argv : process.argv);
-    if (targetWorkspaceDir !== previousDir) {
+    const secondArgv = Array.isArray(argv) && argv.length > 1 ? argv : process.argv;
+    const request = resolveWorkspaceRequest(secondArgv);
+    const desiredDir = request ? request.dir : targetWorkspaceDir;
+    if (desiredDir !== targetWorkspaceDir) {
+      switchWorkspace(desiredDir, request ? request.worktreeSession : null);
       mainWindow.setTitle(`DeepSeek Harness Studio — ${targetWorkspaceDir}`);
       await restartWithCurrentConfig();
     }
@@ -59,18 +168,6 @@ if (!gotLock) {
     mainWindow.show();
     mainWindow.focus();
   });
-}
-
-function resolveDshHome() {
-  const exeDir = path.dirname(app.getPath('exe'));
-  const portableDir = path.join(exeDir, 'portable-data');
-  if (fs.existsSync(portableDir)) {
-    const portableHome = path.join(portableDir, '.dsh');
-    fs.mkdirSync(portableHome, { recursive: true });
-    app.setPath('userData', path.join(portableDir, 'electron-userdata'));
-    return portableHome;
-  }
-  return path.join(os.homedir(), '.dsh');
 }
 
 const DSH_HOME = resolveDshHome();
@@ -92,9 +189,72 @@ function isLocalRuntimeUsable() {
   return fs.existsSync(getLocalRuntimeDshCli());
 }
 
+function isLocalRuntimeAvailable() {
+  if (forceBundledRuntime || Date.now() < localRuntimeBrokenUntil) {
+    return false;
+  }
+  return isLocalRuntimeUsable();
+}
+
 function getRuntimeDir() {
-  if (isLocalRuntimeUsable()) return LOCAL_RUNTIME_DIR;
+  if (isLocalRuntimeAvailable()) return LOCAL_RUNTIME_DIR;
   return getBundledRuntimeDir();
+}
+
+function getRuntimeBinDirs() {
+  const dirs = [];
+  const nodeExe = getBundledNodeExe();
+  if (nodeExe) dirs.push(path.dirname(nodeExe));
+  const pnpmCjs = getBundledPnpmCjs();
+  if (pnpmCjs) dirs.push(path.dirname(pnpmCjs));
+  return dirs;
+}
+
+function prependPathDirs(existingPath, extraDirs) {
+  const separator = process.platform === 'win32' ? ';' : ':';
+  const parts = String(existingPath || '').split(separator).filter(Boolean);
+  const seen = parts.map((item) => item.toLowerCase());
+  for (let index = extraDirs.length - 1; index >= 0; index -= 1) {
+    const dir = extraDirs[index];
+    if (!seen.includes(dir.toLowerCase())) {
+      parts.unshift(dir);
+      seen.unshift(dir.toLowerCase());
+    }
+  }
+  return parts.join(separator);
+}
+
+function currentRegistryUrl() {
+  return useChinaMirror ? UPDATER.REGISTRY : 'https://registry.npmjs.org/';
+}
+
+function buildBackendEnv() {
+  const env = {
+    ...process.env,
+    DSH_HOME,
+    PORT: String(currentPort),
+    NPM_CONFIG_REGISTRY: currentRegistryUrl(),
+    COREPACK_NPM_REGISTRY: currentRegistryUrl(),
+    COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+    ADBLOCK: '1',
+    DISABLE_OPENCOLLECTIVE: '1'
+  };
+  if (PORTABLE_DATA_ROOT) {
+    if (PORTABLE_USERPROFILE) env.USERPROFILE = PORTABLE_USERPROFILE;
+    if (PORTABLE_APPDATA) env.APPDATA = PORTABLE_APPDATA;
+    const portableHome = path.join(PORTABLE_DATA_ROOT, 'home');
+    env.HOME = portableHome;
+    if (process.platform === 'win32') {
+      env.AppData = PORTABLE_APPDATA || path.join(PORTABLE_DATA_ROOT, 'appdata-roaming');
+      env.LocalAppData = PORTABLE_LOCALAPPDATA || path.join(PORTABLE_DATA_ROOT, 'appdata-local');
+    }
+  }
+  const binDirs = getRuntimeBinDirs();
+  if (binDirs.length) {
+    const pathKey = Object.keys(env).find((key) => key.toUpperCase() === 'PATH') || 'PATH';
+    env[pathKey] = prependPathDirs(env[pathKey] || '', binDirs);
+  }
+  return env;
 }
 
 function getBundledNodeExe() {
@@ -171,13 +331,35 @@ function hydratePresetPluginsIfNeeded() {
   }
 }
 
-function handleCliWorkspaceArgs(argv) {
+function switchWorkspace(dir, worktreeSession) {
+  targetWorkspaceDir = dir;
+  targetWorkspaceIsWorktree = false;
+  activeWorktreeSession.worktreePath = null;
+  activeWorktreeSession.repoPath = null;
+  activeWorktreeSession.branchName = null;
+  if (worktreeSession && worktreeSession.created) {
+    targetWorkspaceIsWorktree = true;
+    activeWorktreeSession.worktreePath = worktreeSession.worktreePath;
+    activeWorktreeSession.repoPath = worktreeSession.repoPath;
+    activeWorktreeSession.branchName = worktreeSession.branchName;
+  }
+}
+
+function resolveWorkspaceRequest(argv) {
   const picked = pickWorkspaceMode(argv);
+  if (!picked) return null;
   if (picked.mode === 'open-dir') {
-    targetWorkspaceDir = path.resolve(picked.value);
-  } else if (picked.mode === 'worktree-dir') {
-    const baseDir = path.resolve(picked.value);
-    targetWorkspaceDir = createIsolatedGitWorktree(baseDir);
+    return { dir: path.resolve(picked.value), worktreeSession: null };
+  }
+  const baseDir = path.resolve(picked.value);
+  const session = createIsolatedGitWorktree(baseDir);
+  return { dir: session.worktreePath, worktreeSession: session };
+}
+
+function handleCliWorkspaceArgs(argv) {
+  const request = resolveWorkspaceRequest(argv);
+  if (request) {
+    switchWorkspace(request.dir, request.worktreeSession);
   }
 }
 
@@ -191,12 +373,153 @@ function createIsolatedGitWorktree(repoDir) {
     execSync(`git worktree add "${worktreePath}" -b "${branchName}"`, {
       cwd: repoDir,
       stdio: 'ignore',
-      windowsHide: true
+      windowsHide: true,
+      timeout: GIT_WORKTREE_ADD_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024
     });
-    return worktreePath;
+    return { created: true, worktreePath, repoPath: repoDir, branchName };
   } catch (err) {
     console.warn('[git-worktree] Fallback to original dir:', err.message);
-    return repoDir;
+    return { created: false, worktreePath: repoDir, repoPath: null, branchName: null };
+  }
+}
+
+function isProcessAlive(pid) {
+  const numericPid = Number(pid);
+  if (!Number.isFinite(numericPid) || numericPid <= 0) return false;
+  if (process.platform === 'win32') {
+    return true;
+  }
+  try {
+    process.kill(numericPid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readProcessCommandLine(pid) {
+  const attempts = [
+    `wmic process where "ProcessId=${pid}" get CommandLine /FORMAT:LIST`,
+    `powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' | Select-Object -ExpandProperty CommandLine"`
+  ];
+  for (const command of attempts) {
+    try {
+      const output = execSync(command, {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: WORKTREE_PROCESS_SCAN_TIMEOUT_MS,
+        maxBuffer: 2 * 1024 * 1024
+      });
+      if (output && String(output).trim()) return String(output);
+    } catch {
+      // wmic 在新版系统上可能已移除，继续尝试下一方式
+    }
+  }
+  return '';
+}
+
+function findWindowsProcessesWithWorkingDir(worktreePath) {
+  const pids = new Set();
+  if (!isWindowsPlatform() || !worktreePath) return [];
+  try {
+    const output = execSync(
+      `tasklist /V /FI "IMAGENAME eq node.exe" /FO CSV /NH`,
+      { encoding: 'utf8', windowsHide: true, timeout: WORKTREE_PROCESS_SCAN_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 }
+    );
+    const normalizedPath = worktreePath.toLowerCase().replace(/\s/g, '');
+    for (const line of output.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('"node.exe"')) continue;
+      const pidMatch = trimmed.match(/,\s*"(\d+)",/);
+      if (pidMatch && isProcessAlive(Number(pidMatch[1]))) {
+        pids.add(pidMatch[1]);
+      }
+    }
+    for (const pid of [...pids]) {
+      const commandLine = readProcessCommandLine(pid);
+      if (!commandLine) continue;
+      if (commandLine.replace(/\s/g, '').toLowerCase().includes(normalizedPath)) {
+        try {
+          execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', windowsHide: true });
+          console.warn(`[git-worktree] 已结束工作区残留进程 PID ${pid}`);
+        } catch (killErr) {
+          console.warn(`[git-worktree] 结束残留进程失败 PID ${pid}: ${killErr.message}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[git-worktree] 残留进程扫描失败（继续回收）: ${err.message}`);
+  }
+}
+
+function removeActiveWorktree() {
+  const { worktreePath, repoPath, branchName } = activeWorktreeSession;
+  if (!worktreePath) return false;
+  findWindowsProcessesWithWorkingDir(worktreePath);
+  try {
+    execSync(`git worktree remove "${worktreePath}" --force`, {
+      cwd: repoPath || worktreePath,
+      stdio: 'ignore',
+      windowsHide: true,
+      timeout: GIT_WORKTREE_COMMAND_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024
+    });
+  } catch (err) {
+    console.warn(`[git-worktree] git worktree remove 失败，改为直接移除目录: ${err.message}`);
+    try {
+      fs.rmSync(worktreePath, { recursive: true, force: true });
+    } catch (cleanupErr) {
+      console.warn(`[git-worktree] 目录移除失败: ${cleanupErr.message}`);
+      return false;
+    }
+  }
+  if (repoPath && branchName) {
+    try {
+      execSync(`git branch -D "${branchName}"`, {
+        cwd: repoPath,
+        stdio: 'ignore',
+        windowsHide: true,
+        timeout: GIT_WORKTREE_COMMAND_TIMEOUT_MS,
+        maxBuffer: 1024 * 1024
+      });
+      console.warn(`[git-worktree] 已删除临时分支 ${branchName}`);
+    } catch (branchErr) {
+      console.warn(`[git-worktree] 临时分支删除失败（可能未提交或已被占用）: ${branchErr.message}`);
+    }
+  }
+  activeWorktreeSession.worktreePath = null;
+  activeWorktreeSession.repoPath = null;
+  activeWorktreeSession.branchName = null;
+  targetWorkspaceIsWorktree = false;
+  return true;
+}
+
+async function handleWorktreeWindowClose() {
+  if (worktreeCloseDialogShowing || !mainWindow) return;
+  worktreeCloseDialogShowing = true;
+  try {
+    const response = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      title: 'Worktree 沙箱会话关闭',
+      message: '当前窗口使用了独立的 Git Worktree 沙箱，请选择处理方式：',
+      detail: `Worktree 路径：${activeWorktreeSession.worktreePath || targetWorkspaceDir}\n分支：${activeWorktreeSession.branchName || '（未知）'}`,
+      buttons: ['保留目录并关闭', '销毁 Worktree 并清理分支（推荐）', '取消'],
+      defaultId: 1,
+      cancelId: 2
+    });
+    if (response.response === 2) return;
+    if (response.response === 1) {
+      killProcessTree();
+      const removed = removeActiveWorktree();
+      if (!removed && activeWorktreeSession.worktreePath) {
+        console.warn('[git-worktree] Worktree 回收未完全成功，请手动检查磁盘目录。');
+      }
+    }
+    isQuitting = true;
+    app.quit();
+  } finally {
+    worktreeCloseDialogShowing = false;
   }
 }
 
@@ -215,6 +538,108 @@ function killProcessTree() {
   } catch {}
 }
 
+function clearLocalRuntimeWatchdog() {
+  if (watchdogTimer) {
+    clearTimeout(watchdogTimer);
+    watchdogTimer = null;
+  }
+}
+
+function promoteLocalRuntimeSession(reason) {
+  clearLocalRuntimeWatchdog();
+  useLocalRuntime = false;
+  console.log(`[dsh-watchdog] 热更内核通过启动看门狗${reason ? `（${reason}）` : ''}，交由常规崩溃重启策略接管。`);
+}
+
+function armLocalRuntimeWatchdog(proc) {
+  if (!useLocalRuntime || !proc || !proc.pid) return;
+  clearLocalRuntimeWatchdog();
+  console.log(`[dsh-watchdog] 已启用 ${LOCAL_RUNTIME_WATCHDOG_MS}ms 启动看门狗（local-runtime 热更内核）。`);
+  watchdogTimer = setTimeout(() => {
+    watchdogTimer = null;
+    verifyLocalRuntimeHealth().catch((err) => {
+      console.warn(`[dsh-watchdog] 健康校验异常: ${err.message}`);
+    });
+  }, LOCAL_RUNTIME_WATCHDOG_MS);
+}
+
+async function verifyLocalRuntimeHealth() {
+  if (isQuitting) return;
+  if (!dshProcess) {
+    if (localRuntimeSpawnError) {
+      await breakLocalRuntimeCircuit(`后端子进程启动失败: ${localRuntimeSpawnError.message}`);
+    } else if (watchedRuntimeExitCode === null) {
+      promoteLocalRuntimeSession('进程已按预期结束');
+    } else {
+      await breakLocalRuntimeCircuit(`15 秒内后端子进程异常退出 (code ${watchedRuntimeExitCode})`);
+    }
+    return;
+  }
+  if (await waitForBackendReady(WATCHDOG_BACKEND_PROBE_MS)) {
+    promoteLocalRuntimeSession('后端服务已就绪');
+    return;
+  }
+  if (backendLoadFailures >= WATCHDOG_LOAD_FAILURE_THRESHOLD) {
+    await breakLocalRuntimeCircuit('15 秒内后端服务未就绪，且窗口已连续加载失败');
+    return;
+  }
+  promoteLocalRuntimeSession('后端仍在启动中，放行观察');
+}
+
+async function breakLocalRuntimeCircuit(reason) {
+  if (isQuitting || !useLocalRuntime) return;
+  forceBundledRuntime = true;
+  localRuntimeBrokenUntil = Date.now() + LOCAL_RUNTIME_BROKEN_WINDOW_MS;
+  clearLocalRuntimeWatchdog();
+  useLocalRuntime = false;
+  let quarantinedTo = null;
+  try {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const brokenPath = `${LOCAL_RUNTIME_DIR}.broken.${timestamp}`;
+    fs.renameSync(LOCAL_RUNTIME_DIR, brokenPath);
+    quarantinedTo = brokenPath;
+    cleanupOldBrokenRuntimeDirs(2);
+  } catch (err) {
+    try {
+      fs.mkdirSync(LOCAL_RUNTIME_DIR, { recursive: true });
+      fs.writeFileSync(
+        path.join(LOCAL_RUNTIME_DIR, '.broken-marker.json'),
+        JSON.stringify({ reason, at: new Date().toISOString(), detail: err.message }, null, 2)
+      );
+    } catch (markerErr) {
+      console.warn(`[dsh-watchdog] 写入回退标志文件失败: ${markerErr.message}`);
+    }
+  }
+  console.warn(`[dsh-watchdog] 触发熔断: ${reason}${quarantinedTo ? `，已隔离至 ${quarantinedTo}` : '，已写入回退标志文件'}`);
+  exitRestartSuppressedFor = dshProcess;
+  killProcessTree();
+  crashCount = 0;
+  startDshBackend(true);
+  const ready = await waitForBackendReady();
+  await showLocalRuntimeFallbackNotice(reason, ready);
+}
+
+async function showLocalRuntimeFallbackNotice(reason, ready) {
+  if (!mainWindow) return;
+  if (ready) {
+    await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: '已自动回滚内核',
+      message: '检测到新版官方内核存在兼容性异常，系统已自动为您无感回滚至出厂稳定版。',
+      detail: `触发原因：${reason}\n当前已恢复由出厂内置 runtime 提供服务，工作台配置不受影响。`,
+      buttons: ['我知道了']
+    });
+    return;
+  }
+  await dialog.showMessageBox(mainWindow, {
+    type: 'error',
+    title: '回滚后仍未就绪',
+    message: '已回滚至出厂稳定版，但后端服务仍未就绪。',
+    detail: `触发原因：${reason}\n可在「引擎与救援」菜单切换引擎或启用故障隔离安全模式。`,
+    buttons: ['我知道了']
+  });
+}
+
 function startDshBackend(resetCrash = true) {
   killProcessTree();
   cleanStaleLocks(DSH_HOME);
@@ -227,22 +652,24 @@ function startDshBackend(resetCrash = true) {
   if (isSafeMode) {
     args.push('--safe-mode');
   }
-  const env = {
-    ...process.env,
-    DSH_HOME,
-    PORT: String(currentPort)
-  };
-  if (useChinaMirror) {
-    env.NPM_CONFIG_REGISTRY = 'https://registry.npmmirror.com';
-  }
+  const env = buildBackendEnv();
   const isWindows = process.platform === 'win32';
+  watchedRuntimeExitCode = null;
+  localRuntimeSpawnError = null;
+  useLocalRuntime = false;
   if (currentEngine === 'wsl2' && isWindows) {
     const wslWorkspace = toWslPath(targetWorkspaceDir);
     const safeFlag = isSafeMode ? '--safe-mode' : '';
     const wslCmd = `cd "${wslWorkspace}" && npx --yes @deepseek-ai/dsh web --port ${currentPort} ${safeFlag}`;
     dshProcess = spawn('wsl.exe', ['--', 'bash', '-lc', wslCmd], {
       stdio: 'pipe',
-      windowsHide: true
+      windowsHide: true,
+      env: {
+        ...process.env,
+        NPM_CONFIG_REGISTRY: currentRegistryUrl(),
+        COREPACK_NPM_REGISTRY: currentRegistryUrl(),
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+      }
     });
   } else {
     const dshCliJs = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'bin', 'dsh.mjs');
@@ -262,19 +689,23 @@ function startDshBackend(resetCrash = true) {
     };
     if (bundledNode && fs.existsSync(dshCliJs)) {
       dshProcess = spawn(bundledNode, [dshCliJs, ...args], commonSpawnOpts);
+      useLocalRuntime = path.resolve(runtimeDir) === path.resolve(LOCAL_RUNTIME_DIR);
     } else if (fs.existsSync(dshCmd)) {
       dshProcess = spawn(dshCmd, args, {
         ...commonSpawnOpts,
         shell: isWindows
       });
+      useLocalRuntime = path.resolve(runtimeDir) === path.resolve(LOCAL_RUNTIME_DIR);
     } else {
       dshProcess = spawn('npx', ['--yes', '@deepseek-ai/dsh', ...args], {
         ...commonSpawnOpts,
         shell: isWindows
       });
+      useLocalRuntime = false;
     }
   }
   const proc = dshProcess;
+  armLocalRuntimeWatchdog(proc);
 
   if (proc.stdout) {
     proc.stdout.on('data', (chunk) => console.log(`[dsh] ${String(chunk)}`));
@@ -285,6 +716,9 @@ function startDshBackend(resetCrash = true) {
 
   proc.on('error', (err) => {
     console.error(`[dsh-backend] Failed to spawn backend: ${err.message}`);
+    if (useLocalRuntime) {
+      localRuntimeSpawnError = err;
+    }
     if (dshProcess === proc) {
       dshProcess = null;
     }
@@ -296,6 +730,14 @@ function startDshBackend(resetCrash = true) {
   proc.on('exit', (code) => {
     if (dshProcess === proc) {
       dshProcess = null;
+    }
+    if (exitRestartSuppressedFor === proc) {
+      exitRestartSuppressedFor = null;
+      console.warn(`[dsh-watchdog] 熔断接管的旧进程已退出 (code ${code})，跳过自动重启。`);
+      return;
+    }
+    if (useLocalRuntime && !proc.killedByUs && !isQuitting && !localRuntimeSpawnError) {
+      watchedRuntimeExitCode = code;
     }
     const decision = decideRestart({
       isQuitting,
@@ -315,6 +757,12 @@ function startDshBackend(resetCrash = true) {
         });
       }
     } else if (decision.action === 'restart') {
+      if (useLocalRuntime) {
+        console.warn(
+          `[dsh-watchdog] 热更内核启动期内异常退出 (code ${code})，交由 ${LOCAL_RUNTIME_WATCHDOG_MS}ms 看门狗统一裁决。`
+        );
+        return;
+      }
       console.warn(
         `[dsh-watchdog] Backend exited with code ${code}, re-attempting in ${decision.delayMs}ms (streak ${decision.failures}).`
       );
@@ -529,6 +977,114 @@ function getShellVersion() {
   }
 }
 
+function readJsonSafe(filePath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readFactoryPresetPluginNames() {
+  const runtimeDir = getBundledRuntimeDir();
+  const manifest = readJsonSafe(path.join(runtimeDir, 'preset-manifest.json'));
+  const factoryPkg = readJsonSafe(path.join(runtimeDir, 'package.json'));
+  const names = [
+    ...(Array.isArray(manifest.plugins) ? manifest.plugins : []),
+    ...Object.keys((factoryPkg && factoryPkg.dependencies) || {})
+  ];
+  const deduped = [...new Set(names.filter((name) => typeof name === 'string' && name.trim() && !name.startsWith('@deepseek-ai/dsh')))];
+  return deduped;
+}
+
+function readLocalRuntimePkg() {
+  return readJsonSafe(path.join(LOCAL_RUNTIME_DIR, 'package.json')) || {};
+}
+
+function writeLocalRuntimePkg(pkg) {
+  try {
+    fs.mkdirSync(LOCAL_RUNTIME_DIR, { recursive: true });
+    fs.writeFileSync(path.join(LOCAL_RUNTIME_DIR, 'package.json'), JSON.stringify(pkg, null, 2));
+    return true;
+  } catch (err) {
+    console.warn(`[updater] 写入 local-runtime/package.json 失败: ${err.message}`);
+    return false;
+  }
+}
+
+function isPresetPluginInstalled(pluginName) {
+  return fs.existsSync(path.join(LOCAL_RUNTIME_DIR, 'node_modules', pluginName));
+}
+
+function mergeLocalRuntimePresetDependencies(presetPlugins) {
+  const pkg = readLocalRuntimePkg();
+  const deps = { ...(pkg.dependencies || {}) };
+  const added = [];
+  for (const pluginName of presetPlugins) {
+    if (!(pluginName in deps)) {
+      deps[pluginName] = '*';
+      added.push(pluginName);
+    }
+  }
+  if (!added.length) return [];
+  pkg.dependencies = deps;
+  return writeLocalRuntimePkg(pkg) ? added : [];
+}
+
+function pruneLocalRuntimeDependencies(names) {
+  if (!names.length) return;
+  const pkg = readLocalRuntimePkg();
+  const deps = { ...(pkg.dependencies || {}) };
+  for (const name of names) {
+    delete deps[name];
+  }
+  pkg.dependencies = deps;
+  writeLocalRuntimePkg(pkg);
+}
+
+function runPnpmAdd(nodeExe, pnpmCjs, packages) {
+  return new Promise((resolve) => {
+    const args = [pnpmCjs, 'add', ...packages, `--registry=${currentRegistryUrl()}`];
+    const pnpmProc = spawn(nodeExe, args, {
+      cwd: LOCAL_RUNTIME_DIR,
+      env: {
+        ...process.env,
+        NPM_CONFIG_REGISTRY: currentRegistryUrl(),
+        NPM_CONFIG_AUDIT: 'false',
+        NPM_CONFIG_FUND: 'false'
+      },
+      stdio: 'pipe',
+      windowsHide: true
+    });
+    let stderr = '';
+    let settled = false;
+    const settle = (ok) => {
+      if (!settled) {
+        settled = true;
+        resolve(ok);
+      }
+    };
+    pnpmProc.stdout.on('data', (chunk) => console.log(`[updater] ${String(chunk)}`));
+    pnpmProc.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+      console.warn(`[updater] ${String(chunk)}`);
+    });
+    pnpmProc.on('error', (err) => {
+      console.warn(`[updater] pnpm 启动失败: ${err.message}`);
+      settle(false);
+    });
+    pnpmProc.on('exit', (code) => {
+      if (code === 0) {
+        settle(true);
+      } else {
+        console.warn(`[updater] pnpm 安装失败 (exit ${code}): ${stderr.slice(0, 500)}`);
+        settle(false);
+      }
+    });
+  });
+}
+
 async function installHotUpdateCore(targetVersion) {
   const nodeExe = getBundledNodeExe();
   const pnpmCjs = getBundledPnpmCjs();
@@ -543,58 +1099,66 @@ async function installHotUpdateCore(targetVersion) {
       JSON.stringify({ name: 'dsh-local-hot-update', version: '0.0.0', private: true }, null, 2)
     );
   }
-  setWindowProgress('正在通过国内镜像热更新 DSH 内核与插件...');
-  return new Promise((resolve, reject) => {
-    const pkgName = targetVersion
-      ? `@deepseek-ai/dsh@${targetVersion}`
-      : '@deepseek-ai/dsh@latest';
-    const args = [
-      pnpmCjs,
-      'add',
-      pkgName,
-      `--registry=${UPDATER.REGISTRY}`
-    ];
-    const pnpmProc = spawn(nodeExe, args, {
-      cwd: LOCAL_RUNTIME_DIR,
-      env: {
-        ...process.env,
-        NPM_CONFIG_REGISTRY: UPDATER.REGISTRY,
-        NPM_CONFIG_AUDIT: 'false',
-        NPM_CONFIG_FUND: 'false'
-      },
-      stdio: 'pipe',
-      windowsHide: true
-    });
-    let stderr = '';
-    let settled = false;
-    pnpmProc.stdout.on('data', (chunk) => console.log(`[updater] ${String(chunk)}`));
-    pnpmProc.stderr.on('data', (chunk) => {
-      stderr += String(chunk);
-      console.warn(`[updater] ${String(chunk)}`);
-    });
-    pnpmProc.on('error', (err) => {
-      if (settled) return;
-      settled = true;
-      reject(new Error(`pnpm 启动失败: ${err.message}`));
-    });
-    pnpmProc.on('exit', (code) => {
-      if (settled) return;
-      settled = true;
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`pnpm 安装失败 (exit ${code}): ${stderr.slice(0, 500)}`));
+  setWindowProgress('正在通过国内镜像热更新 DSH 内核...');
+  const corePackage = targetVersion
+    ? `@deepseek-ai/dsh@${targetVersion}`
+    : '@deepseek-ai/dsh@latest';
+  const coreInstalled = await runPnpmAdd(nodeExe, pnpmCjs, [corePackage]);
+  if (!coreInstalled) {
+    throw new Error('DSH 内核热更新失败，请检查网络或稍后重试');
+  }
+  const presetPluginNames = readFactoryPresetPluginNames();
+  if (!presetPluginNames.length) return;
+  const added = mergeLocalRuntimePresetDependencies(presetPluginNames);
+  if (!added.length) return;
+  setWindowProgress(`正在同步出厂预置插件（${presetPluginNames.length} 项）...`);
+  const pluginsInstalled = await runPnpmAdd(nodeExe, pnpmCjs, added.map((name) => `${name}@*`));
+  const missing = added.filter((name) => !isPresetPluginInstalled(name));
+  if (missing.length) {
+    pruneLocalRuntimeDependencies(missing);
+  }
+  if (!pluginsInstalled || missing.length) {
+    console.warn(
+      `[updater] 出厂预置插件未全部保留（插件仍由 default-profile 预置包提供）；` +
+        `已安装 ${presetPluginNames.length - missing.length}/${added.length}，` +
+        `已从 local-runtime 清单移除不可安装的插件：${missing.join(', ') || '（无）'}`
+    );
+  }
+}
+
+function cleanupOldBrokenRuntimeDirs(keepCount = 2) {
+  let parent;
+  try {
+    parent = path.dirname(LOCAL_RUNTIME_DIR);
+    const brokenNames = fs
+      .readdirSync(parent)
+      .filter((name) => name.startsWith('local-runtime.broken.'))
+      .sort()
+      .reverse();
+    if (brokenNames.length <= keepCount) return;
+    for (const name of brokenNames.slice(keepCount)) {
+      try {
+        fs.rmSync(path.join(parent, name), { recursive: true, force: true });
+        console.log(`[dsh-watchdog] 已清理历史隔离内核 ${name}`);
+      } catch (err) {
+        console.warn(`[dsh-watchdog] 清理历史隔离内核失败 ${name}: ${err.message}`);
       }
-    });
-  });
+    }
+  } catch (err) {
+    console.warn(`[dsh-watchdog] 扫描隔离内核失败: ${err.message}`);
+  }
 }
 
 function isPortable() {
+  if (PORTABLE_DATA_ROOT) return true;
   const exeDir = path.dirname(app.getPath('exe'));
-  return fs.existsSync(path.join(exeDir, 'portable-data'));
+  return fs.existsSync(path.join(exeDir, DSH_PORTABLE_MARKER_DIR));
 }
 
 async function revertToFactoryRuntime() {
+  forceBundledRuntime = false;
+  localRuntimeBrokenUntil = 0;
+  clearLocalRuntimeWatchdog();
   if (fs.existsSync(LOCAL_RUNTIME_DIR)) {
     try {
       fs.rmSync(LOCAL_RUNTIME_DIR, { recursive: true, force: true });
@@ -607,6 +1171,7 @@ async function revertToFactoryRuntime() {
       return;
     }
   }
+  cleanupOldBrokenRuntimeDirs(0);
   await restartWithCurrentConfig();
   if (mainWindow) {
     dialog.showMessageBox(mainWindow, {
@@ -647,7 +1212,11 @@ async function showUpdateCheckResult(hasUpdate, coreInfo, shellInfo, remoteCore,
 async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell) {
   try {
     if (coreInfo.needsUpdate) {
+      forceBundledRuntime = false;
+      localRuntimeBrokenUntil = 0;
+      clearLocalRuntimeWatchdog();
       await installHotUpdateCore(remoteCore);
+      cleanupOldBrokenRuntimeDirs(2);
     }
 
     if (shellInfo.needsUpdate) {
@@ -769,7 +1338,8 @@ function buildNativeAppMenu() {
               title: '选择 Git 仓库目录以自动创建隔离 Worktree'
             });
             if (!res.canceled && res.filePaths[0]) {
-              targetWorkspaceDir = createIsolatedGitWorktree(res.filePaths[0]);
+              const session = createIsolatedGitWorktree(res.filePaths[0]);
+              switchWorkspace(session.worktreePath, session);
               if (mainWindow) {
                 mainWindow.setTitle(`DeepSeek Harness Studio — ${targetWorkspaceDir}`);
               }
@@ -781,10 +1351,7 @@ function buildNativeAppMenu() {
           label: '将剪贴板内容投喂至当前输入框 (Alt+Shift+V)',
           accelerator: 'Alt+Shift+V',
           click: () => {
-            const text = clipboard.readText();
-            if (mainWindow && text) {
-              mainWindow.webContents.send('dsh:inject-clipboard-text', text);
-            }
+            feedClipboardIntoEditor();
           }
         },
         { type: 'separator' },
@@ -1000,12 +1567,75 @@ function createMainWindow() {
     event.preventDefault();
     shell.openExternal(url);
   });
-  mainWindow.on('close', (event) => {
-    if (!isQuitting && isWindowsPlatform()) {
-      event.preventDefault();
-      mainWindow.hide();
-    }
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    backendLoadFailures += 1;
+    console.warn(
+      `[dsh-watchdog] 后端页面加载失败 code=${errorCode} ${errorDescription}（连续 ${backendLoadFailures} 次）`
+    );
   });
+  mainWindow.webContents.on('dom-ready', () => {
+    backendLoadFailures = 0;
+  });
+  mainWindow.on('close', (event) => {
+    if (isQuitting || !isWindowsPlatform()) return;
+    event.preventDefault();
+    if (targetWorkspaceIsWorktree) {
+      handleWorktreeWindowClose();
+      return;
+    }
+    mainWindow.hide();
+  });
+}
+
+function saveClipboardImage(image) {
+  const captureDir = PORTABLE_DATA_ROOT
+    ? path.join(PORTABLE_DATA_ROOT, 'temp-captures')
+    : path.join(os.tmpdir(), 'dsh-studio-captures');
+  const target = path.join(
+    captureDir,
+    `clip-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`
+  );
+  try {
+    fs.mkdirSync(captureDir, { recursive: true });
+    fs.writeFileSync(target, image.toPNG());
+    console.warn(`[clipboard] 截图已落盘: ${target}`);
+    return target;
+  } catch (err) {
+    console.warn(`[clipboard] 截图落盘失败: ${err.message}`);
+    return null;
+  }
+}
+
+function convertToWslMountPath(windowsPath) {
+  if (typeof windowsPath !== 'string' || !windowsPath.trim()) return windowsPath;
+  return toWslPath(windowsPath.trim());
+}
+
+function feedClipboardIntoEditor() {
+  if (!mainWindow || !mainWindow.webContents) return;
+  if (currentEngine === 'wsl2' && isWindowsPlatform()) {
+    try {
+      const image = clipboard.readImage();
+      if (image && !image.isEmpty()) {
+        const imagePath = saveClipboardImage(image);
+        if (imagePath) {
+          mainWindow.webContents.send('dsh:inject-clipboard-text', convertToWslMountPath(imagePath));
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn(`[clipboard] 读取剪贴板截图失败: ${err.message}`);
+    }
+  }
+  let text = '';
+  try {
+    text = clipboard.readText() || '';
+  } catch (err) {
+    console.warn(`[clipboard] 读取剪贴板文本失败: ${err.message}`);
+  }
+  if (text) {
+    mainWindow.webContents.send('dsh:inject-clipboard-text', text);
+  }
 }
 
 ipcMain.on('dsh:native-notify', (event, payload) => {
@@ -1075,6 +1705,31 @@ ipcMain.handle('dsh:unregister-context-menu', (event) => {
   return result.total > 0 && result.failed === 0;
 });
 
+ipcMain.on('dsh:request-clipboard-paste', (event) => {
+  try {
+    assertTrustedSender(event);
+  } catch (err) {
+    console.warn(`[ipc] clipboard-paste rejected: ${err.message}`);
+    return;
+  }
+  feedClipboardIntoEditor();
+});
+
+ipcMain.handle('dsh:convert-to-wsl-path', (event, windowsPath) => {
+  assertTrustedSender(event);
+  return convertToWslMountPath(windowsPath);
+});
+
+ipcMain.handle('dsh:get-workspace-status', (event) => {
+  assertTrustedSender(event);
+  return {
+    isWorktree: targetWorkspaceIsWorktree,
+    worktreePath: activeWorktreeSession.worktreePath,
+    worktreeBranch: activeWorktreeSession.branchName,
+    engine: currentEngine
+  };
+});
+
 app.whenReady().then(async () => {
   if (!gotLock) return;
   handleCliWorkspaceArgs(process.argv);
@@ -1095,6 +1750,7 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  clearLocalRuntimeWatchdog();
   globalShortcut.unregisterAll();
   killProcessTree();
 });
