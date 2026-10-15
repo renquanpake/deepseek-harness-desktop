@@ -9,14 +9,21 @@ const DSH_VERSION = process.env.DSH_VERSION || 'latest';
 const NPM_MIRROR_REGISTRY = 'https://registry.npmmirror.com';
 
 const PREINSTALL_PLUGINS = [
+  'dsh-our-free-model',
+  'dshmarket',
   'dsh-codex-ui',
   'dsh-better-sidebar',
-  'dshmarket',
   'dsh-pathlink',
   'dsh-paste-input',
   'dsh-keyboard-history',
   'dsh-checkpoint-rewind',
   'dsh-file-claim'
+];
+
+const PLUGIN_MARKET_CANDIDATES = [
+  'dshmarket',
+  '@deepseek-ai/plugin-market',
+  'dsh-market'
 ];
 
 function runCmd(cmd, cwd = RUNTIME_DIR, allowFail = false) {
@@ -57,17 +64,28 @@ function copyBundledNode() {
 function installBundledPnpm() {
   console.log('[prepare-runtime] Bundling pnpm into dsh-runtime/node_modules/pnpm');
   const pnpmPkg = path.join(RUNTIME_DIR, 'node_modules', 'pnpm');
-  if (fs.existsSync(path.join(pnpmPkg, 'bin', 'pnpm.cjs'))) return;
-  try {
-    fs.mkdirSync(RUNTIME_DIR, { recursive: true });
-    runCmd(
-      `npm install pnpm@latest --no-audit --no-fund --loglevel=error --registry=${NPM_MIRROR_REGISTRY}`,
-      RUNTIME_DIR,
-      true
-    );
-  } catch (err) {
-    console.warn(`[prepare-runtime] Warning: failed to bundle pnpm (${err.message})`);
+  const pnpmBinSrc = path.join(pnpmPkg, 'bin', 'pnpm.cjs');
+  if (!fs.existsSync(pnpmBinSrc)) {
+    try {
+      fs.mkdirSync(RUNTIME_DIR, { recursive: true });
+      runCmd(
+        `npm install pnpm@latest --no-audit --no-fund --loglevel=error --registry=${NPM_MIRROR_REGISTRY}`,
+        RUNTIME_DIR,
+        true
+      );
+    } catch (err) {
+      console.warn(`[prepare-runtime] Warning: failed to bundle pnpm (${err.message})`);
+    }
   }
+  if (!fs.existsSync(pnpmBinSrc)) {
+    console.warn('[prepare-runtime] Warning: pnpm.cjs not found after install, skipping dual-path copy');
+    return;
+  }
+  const pnpmBinDest = path.join(RUNTIME_DIR, 'pnpm.cjs');
+  fs.copyFileSync(pnpmBinSrc, pnpmBinDest);
+  const compatDir = path.join(RUNTIME_DIR, 'node_modules', 'pnpm', 'bin');
+  fs.mkdirSync(compatDir, { recursive: true });
+  fs.copyFileSync(pnpmBinSrc, path.join(compatDir, 'pnpm.cjs'));
 }
 
 function main() {
@@ -106,17 +124,39 @@ function main() {
     process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
   );
 
+  const installedPlugins = [];
+
+  const tryInstallPlugin = (name) => {
+    console.log(`[prepare-runtime] Pre-installing plugin: ${name}`);
+    execSync(`"${dshBin}" plugin --profile web add ${name}`, {
+      cwd: RUNTIME_DIR,
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        DSH_HOME: PRESET_PROFILE_DIR
+      }
+    });
+    installedPlugins.push(name);
+  };
+
+  let marketPluginResolved = null;
+  for (const candidate of PLUGIN_MARKET_CANDIDATES) {
+    try {
+      tryInstallPlugin(candidate);
+      marketPluginResolved = candidate;
+      console.log(`[prepare-runtime] Plugin market resolved via candidate: ${candidate}`);
+      break;
+    } catch (e) {
+      console.warn(`[prepare-runtime] Plugin market candidate ${candidate} unavailable (404/missing), trying next: ${e.message}`);
+    }
+  }
+  if (!marketPluginResolved) {
+    console.warn('[prepare-runtime] All plugin market candidates unavailable, skipping market plugin');
+  }
+
   for (const plugin of PREINSTALL_PLUGINS) {
     try {
-      console.log(`[prepare-runtime] Pre-installing plugin: ${plugin}`);
-      execSync(`"${dshBin}" plugin --profile web add ${plugin}`, {
-        cwd: RUNTIME_DIR,
-        stdio: 'inherit',
-        env: {
-          ...process.env,
-          DSH_HOME: PRESET_PROFILE_DIR
-        }
-      });
+      tryInstallPlugin(plugin);
     } catch (e) {
       console.warn(`[prepare-runtime] Skipped optional plugin ${plugin}: ${e.message}`);
     }
@@ -125,7 +165,7 @@ function main() {
   console.log('=== [5/5] Recording preset dependencies and writing manifest ===');
 
   const presetDependencies = {};
-  for (const plugin of PREINSTALL_PLUGINS) {
+  for (const plugin of installedPlugins) {
     presetDependencies[plugin] = '*';
   }
   try {
@@ -138,9 +178,22 @@ function main() {
     console.warn(`[prepare-runtime] Warning: failed to record preset plugin dependencies (${err.message})`);
   }
 
+  const builtAt = new Date().toISOString();
+  const allRequested = [...PREINSTALL_PLUGINS, ...PLUGIN_MARKET_CANDIDATES];
+  const manifestData = {
+    dshVersion: DSH_VERSION,
+    plugins: installedPlugins,
+    skipped: allRequested.filter((name) => !installedPlugins.includes(name)),
+    pluginMarketCandidates: PLUGIN_MARKET_CANDIDATES,
+    builtAt
+  };
   fs.writeFileSync(
     path.join(RUNTIME_DIR, 'preset-manifest.json'),
-    JSON.stringify({ dshVersion: DSH_VERSION, plugins: PREINSTALL_PLUGINS, builtAt: new Date().toISOString() }, null, 2)
+    JSON.stringify(manifestData, null, 2)
+  );
+  fs.writeFileSync(
+    path.join(RUNTIME_DIR, 'preinstalled-plugins.json'),
+    JSON.stringify(manifestData, null, 2)
   );
 
   console.log('Runtime preparation completed successfully.');
