@@ -12,7 +12,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { semverCompare, isNewer, decideUpdatePlan, buildProxyedUrls, pickInstallerUrl } = require('../lib/updater');
+const { semverCompare, isNewer, decideUpdatePlan, buildProxyedUrls, pickInstallerUrl, downloadFromUrl, downloadWithProxies } = require('../lib/updater');
 
 // ===== 辅助函数（与 main.js 逻辑一致，用于测试） =====
 
@@ -104,129 +104,16 @@ async function checkRemoteReleaseAssets() {
   return null;
 }
 
-// ===== 下载函数（与 main.js 逻辑一致，用于测试） =====
+// ===== 下载函数：直接使用 lib/updater.js 的生产实现 =====
 
 const PROXIES = [
   'https://ghfast.top/',
   'https://mirror.ghproxy.com/'
 ];
 
-function downloadFromUrl(url, destPath, onProgress, maxRedirects = 5) {
-  return new Promise((resolve, reject) => {
-    let redirects = 0;
-    let activeReq = null;
-    let activeWs = null;
-    let bodyReceived = false;
-
-    const cleanup = () => {
-      if (activeReq) {
-        try { activeReq.destroy(); } catch {}
-      }
-      if (activeWs) {
-        try { activeWs.close(); } catch {}
-      }
-    };
-
-    const fetch = (currentUrl) => {
-      if (redirects >= maxRedirects) {
-        reject(new Error('Too many redirects'));
-        return;
-      }
-      redirects += 1;
-
-      const lib = currentUrl.startsWith('https:') ? https : http;
-      const file = fs.createWriteStream(destPath);
-      activeWs = file;
-
-      let req;
-      try {
-        req = lib.get(currentUrl, (res) => {
-          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            res.resume();
-            cleanup();
-            const redirectUrl = new URL(res.headers.location, currentUrl).toString();
-            fetch(redirectUrl);
-            return;
-          }
-          if (res.statusCode < 200 || res.statusCode >= 300) {
-            res.resume();
-            cleanup();
-            reject(new Error(`HTTP ${res.statusCode} for ${currentUrl}`));
-            return;
-          }
-          const total = Number(res.headers['content-length'] || 0);
-          let received = 0;
-          res.on('data', (chunk) => {
-            received += chunk.length;
-            if (typeof onProgress === 'function' && total > 0) {
-              const percent = Math.min(99, Math.floor((received / total) * 100));
-              onProgress(percent, total, received);
-            }
-          });
-          res.on('end', () => {
-            bodyReceived = true;
-          });
-          res.pipe(file);
-        });
-      } catch (err) {
-        cleanup();
-        reject(err);
-        return;
-      }
-      activeReq = req;
-      req.setTimeout(30000, () => {
-        try { req.destroy(new Error('download timeout')); } catch {}
-      });
-      req.on('error', (err) => {
-        cleanup();
-        reject(err);
-      });
-      file.on('error', (err) => {
-        cleanup();
-        reject(err);
-      });
-      file.on('close', () => {
-        if (bodyReceived) {
-          resolve(destPath);
-        }
-      });
-    };
-
-    fetch(url);
-  });
-}
-
-function downloadWithProxies(url, destPath, onProgress) {
-  return new Promise((resolve, reject) => {
-    const candidates = buildProxyedUrls(url, PROXIES);
-    let attemptIndex = 0;
-    let settled = false;
-
-    const attemptDownload = () => {
-      if (settled) return;
-      const currentUrl = candidates[attemptIndex];
-      if (!currentUrl) {
-        settled = true;
-        reject(new Error('All download mirrors exhausted'));
-        return;
-      }
-      downloadFromUrl(currentUrl, destPath, onProgress)
-        .then(resolve)
-        .catch(() => {
-          try {
-            if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-          } catch {}
-          attemptIndex += 1;
-          attemptDownload();
-        });
-    };
-
-    attemptDownload();
-  });
-}
-
 // ===== Mock HTTP 服务器 =====
 
+const mockServers = [];
 let mockServer = null;
 let mockServerPort = null;
 
@@ -241,6 +128,7 @@ function createMockServer(routes) {
         res.end('Not Found');
       }
     });
+    mockServers.push(mockServer);
     mockServer.listen(0, '127.0.0.1', () => {
       mockServerPort = mockServer.address().port;
       resolve();
@@ -353,7 +241,7 @@ test('7. Mock 服务器: 直接下载 (无重定向)', async () => {
 
   try {
     const url = `http://127.0.0.1:${mockServerPort}/file`;
-    const result = await downloadFromUrl(url, destPath, null, 5);
+    const result = await downloadFromUrl(url, destPath, null);
     assert.strictEqual(result, destPath, '应该返回目标路径');
 
     const content = fs.readFileSync(destPath, 'utf8');
@@ -384,7 +272,7 @@ test('7b. Mock 服务器: 跟随 302 重定向', async () => {
 
   try {
     const redirectUrl = `http://127.0.0.1:${mockServerPort}/redirect`;
-    const result = await downloadFromUrl(redirectUrl, destPath, null, 5);
+    const result = await downloadFromUrl(redirectUrl, destPath, null);
     assert.strictEqual(result, destPath, '应该返回目标路径');
 
     const content = fs.readFileSync(destPath, 'utf8');
@@ -416,7 +304,7 @@ test('8. Mock 服务器: 下载失败时清理文件并回退', async () => {
     // 测试直接下载失败
     const failUrl = `http://127.0.0.1:${mockServerPort}/fail-404`;
     await assert.rejects(
-      () => downloadFromUrl(failUrl, destPath, null, 5),
+      () => downloadFromUrl(failUrl, destPath, null),
       /HTTP 404/,
       '应该拒绝失败的下载'
     );
@@ -428,7 +316,7 @@ test('8. Mock 服务器: 下载失败时清理文件并回退', async () => {
     let success = false;
     for (let i = 0; i < urls.length; i++) {
       try {
-        await downloadFromUrl(urls[i], destPath, null, 5);
+        await downloadFromUrl(urls[i], destPath, null);
         success = true;
         break;
       } catch {
@@ -469,7 +357,7 @@ test('9. Mock 服务器: bodyReceived 标志防止错误 resolve', async () => {
     // 这个测试验证 bodyReceived 标志的工作
     // 由于 res.destroy() 不会触发 'end'，bodyReceived 应该保持 false
     await assert.rejects(
-      () => downloadFromUrl(url, destPath, null, 5),
+      () => downloadFromUrl(url, destPath, null),
       '应该拒绝不完整的下载'
     );
     console.log('   ✓ bodyReceived 标志正确防止了不完整下载的 resolve');
@@ -486,7 +374,7 @@ test('10. 多代理回退: 所有代理失败时拒绝', async () => {
   try {
     const fakeUrl = 'https://this-domain-does-not-exist-xyz123.com/file.exe';
     await assert.rejects(
-      () => downloadWithProxies(fakeUrl, destPath, null),
+      () => downloadWithProxies(fakeUrl, destPath, null, { proxies: PROXIES }),
       /All download mirrors exhausted/,
       '应该拒绝所有代理都失败的情况'
     );
@@ -511,7 +399,7 @@ test('11. 小型文件真实下载测试', async () => {
       try {
         await downloadFromUrl(urls[i], destPath, (pct) => {
           progressCalls++;
-        }, 5);
+        });
         success = true;
         break;
       } catch {
@@ -574,8 +462,9 @@ test('12. 完整更新流程模拟', async () => {
 
 // ===== 清理 =====
 
-after(() => {
-  if (mockServer) {
-    mockServer.close();
-  }
+after(async () => {
+  await Promise.all(mockServers.map((server) => new Promise((done) => {
+    server.closeAllConnections();
+    server.close(() => done());
+  })));
 });

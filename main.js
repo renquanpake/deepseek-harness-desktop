@@ -27,7 +27,8 @@ const {
   decideUpdatePlan,
   formatUpdateDescription,
   buildProxyedUrls,
-  pickInstallerUrl
+  pickInstallerUrl,
+  downloadWithProxies
 } = require('./lib/updater');
 
 const streamPipeline = promisify(stream.pipeline);
@@ -528,120 +529,6 @@ function getShellVersion() {
   }
 }
 
-function downloadFromUrl(url, destPath, onProgress, maxRedirects = 5) {
-  return new Promise((resolve, reject) => {
-    let redirects = 0;
-    let activeReq = null;
-    let activeWs = null;
-    let bodyReceived = false;
-
-    const cleanup = () => {
-      if (activeReq) {
-        try { activeReq.destroy(); } catch {}
-      }
-      if (activeWs) {
-        try { activeWs.close(); } catch {}
-      }
-    };
-
-    const fetch = (currentUrl) => {
-      if (redirects >= maxRedirects) {
-        reject(new Error('Too many redirects'));
-        return;
-      }
-      redirects += 1;
-
-      const lib = currentUrl.startsWith('https:') ? https : http;
-      const file = fs.createWriteStream(destPath);
-      activeWs = file;
-
-      let req;
-      try {
-        req = lib.get(currentUrl, (res) => {
-          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            res.resume();
-            cleanup();
-            const redirectUrl = new URL(res.headers.location, currentUrl).toString();
-            fetch(redirectUrl);
-            return;
-          }
-          if (res.statusCode < 200 || res.statusCode >= 300) {
-            res.resume();
-            cleanup();
-            reject(new Error(`HTTP ${res.statusCode} for ${currentUrl}`));
-            return;
-          }
-          const total = Number(res.headers['content-length'] || 0);
-          let received = 0;
-          res.on('data', (chunk) => {
-            received += chunk.length;
-            if (typeof onProgress === 'function' && total > 0) {
-              const percent = Math.min(99, Math.floor((received / total) * 100));
-              onProgress(percent, total, received);
-            }
-          });
-          res.on('end', () => {
-            bodyReceived = true;
-          });
-          res.pipe(file);
-        });
-      } catch (err) {
-        cleanup();
-        reject(err);
-        return;
-      }
-      activeReq = req;
-      req.setTimeout(UPDATER.DOWNLOAD_TIMEOUT_MS, () => {
-        try { req.destroy(new Error('download timeout')); } catch {}
-      });
-      req.on('error', (err) => {
-        cleanup();
-        reject(err);
-      });
-      file.on('error', (err) => {
-        cleanup();
-        reject(err);
-      });
-      file.on('close', () => {
-        if (bodyReceived) {
-          resolve(destPath);
-        }
-      });
-    };
-
-    fetch(url);
-  });
-}
-
-function downloadWithProxies(url, destPath, onProgress) {
-  return new Promise((resolve, reject) => {
-    const candidates = buildProxyedUrls(url, UPDATER.GITHUB_DOWNLOAD_PROXIES);
-    let attemptIndex = 0;
-    let settled = false;
-
-    const attemptDownload = () => {
-      if (settled) return;
-      const currentUrl = candidates[attemptIndex];
-      if (!currentUrl) {
-        settled = true;
-        reject(new Error('All download mirrors exhausted'));
-        return;
-      }
-      downloadFromUrl(currentUrl, destPath, onProgress)
-        .then(resolve)
-        .catch(() => {
-          try {
-            if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-          } catch {}
-          attemptIndex += 1;
-          attemptDownload();
-        });
-    };
-
-    attemptDownload();
-  });
-}
-
 async function installHotUpdateCore(targetVersion) {
   const nodeExe = getBundledNodeExe();
   const pnpmCjs = getBundledPnpmCjs();
@@ -779,7 +666,7 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell) {
         setWindowProgress('正在下载客户端外壳更新 (0%)...');
         await downloadWithProxies(release.installerUrl, installerPath, (percent) => {
           setWindowProgress(`正在下载客户端外壳更新 (${percent}%)...`);
-        });
+        }, { proxies: UPDATER.GITHUB_DOWNLOAD_PROXIES, timeoutMs: UPDATER.DOWNLOAD_TIMEOUT_MS });
 
         if (isPortable()) {
           const folder = path.dirname(installerPath);
