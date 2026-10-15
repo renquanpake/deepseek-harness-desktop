@@ -5,7 +5,10 @@ contextBridge.exposeInMainWorld('dshDesktopShell', {
   switchEngine: (mode) => ipcRenderer.invoke('dsh:switch-engine', mode),
   restartSafeMode: () => ipcRenderer.invoke('dsh:restart-safe-mode'),
   registerContextMenu: () => ipcRenderer.invoke('dsh:register-context-menu'),
-  unregisterContextMenu: () => ipcRenderer.invoke('dsh:unregister-context-menu')
+  unregisterContextMenu: () => ipcRenderer.invoke('dsh:unregister-context-menu'),
+  getWorkspaceStatus: () => ipcRenderer.invoke('dsh:get-workspace-status'),
+  requestClipboardPaste: () => ipcRenderer.send('dsh:request-clipboard-paste'),
+  convertToWslPath: (windowsPath) => ipcRenderer.invoke('dsh:convert-to-wsl-path', windowsPath)
 });
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -44,6 +47,21 @@ window.addEventListener('DOMContentLoaded', () => {
   if (document.body) {
     observer.observe(document.body, { childList: true, subtree: true });
   }
+
+  let lastClipboardPasteRequest = 0;
+  window.addEventListener('paste', (event) => {
+    const now = Date.now();
+    if (now - lastClipboardPasteRequest < 800) return;
+    const target = event.target;
+    const isEditableTarget =
+      target &&
+      (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.isContentEditable);
+    if (!isEditableTarget) return;
+    const pastedText = event.clipboardData ? event.clipboardData.getData('text') : '';
+    if (pastedText && pastedText.trim()) return;
+    lastClipboardPasteRequest = now;
+    ipcRenderer.send('dsh:request-clipboard-paste');
+  });
 
   ipcRenderer.on('dsh:inject-clipboard-text', (_event, text) => {
     if (!text) return;

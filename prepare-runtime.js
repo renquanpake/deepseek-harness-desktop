@@ -122,7 +122,21 @@ function main() {
     }
   }
 
-  console.log('=== [5/5] Writing preset manifest and finalizing ===');
+  console.log('=== [5/5] Recording preset dependencies and writing manifest ===');
+
+  const presetDependencies = {};
+  for (const plugin of PREINSTALL_PLUGINS) {
+    presetDependencies[plugin] = '*';
+  }
+  try {
+    const runtimePkgPath = path.join(RUNTIME_DIR, 'package.json');
+    const currentPkg = JSON.parse(fs.readFileSync(runtimePkgPath, 'utf8'));
+    currentPkg.dependencies = { ...(currentPkg.dependencies || {}), ...presetDependencies };
+    fs.writeFileSync(runtimePkgPath, JSON.stringify(currentPkg, null, 2));
+    console.log(`[prepare-runtime] Recorded ${Object.keys(presetDependencies).length} preset plugin dependencies in dsh-runtime/package.json`);
+  } catch (err) {
+    console.warn(`[prepare-runtime] Warning: failed to record preset plugin dependencies (${err.message})`);
+  }
 
   fs.writeFileSync(
     path.join(RUNTIME_DIR, 'preset-manifest.json'),
