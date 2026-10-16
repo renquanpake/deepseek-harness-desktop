@@ -8,7 +8,14 @@ contextBridge.exposeInMainWorld('dshDesktopShell', {
   unregisterContextMenu: () => ipcRenderer.invoke('dsh:unregister-context-menu'),
   getWorkspaceStatus: () => ipcRenderer.invoke('dsh:get-workspace-status'),
   requestClipboardPaste: () => ipcRenderer.send('dsh:request-clipboard-paste'),
-  convertToWslPath: (windowsPath) => ipcRenderer.invoke('dsh:convert-to-wsl-path', windowsPath)
+  convertToWslPath: (windowsPath) => ipcRenderer.invoke('dsh:convert-to-wsl-path', windowsPath),
+  getAutoStart: () => ipcRenderer.invoke('dsh:get-auto-start'),
+  setAutoStart: (enable) => ipcRenderer.invoke('dsh:set-auto-start', enable),
+  onAutoStartChanged: (callback) => {
+    if (typeof callback === 'function') {
+      ipcRenderer.on('dsh:auto-start-changed', (_event, enabled) => callback(enabled));
+    }
+  }
 });
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -24,8 +31,84 @@ window.addEventListener('DOMContentLoaded', () => {
     return originalRAF(callback);
   };
 
+  function mountSidebarAutoStartButton() {
+    if (document.getElementById('dsh-autostart-toggle')) return;
+
+    const btn = document.createElement('div');
+    btn.id = 'dsh-autostart-toggle';
+    btn.setAttribute('role', 'button');
+    btn.setAttribute('tabindex', '0');
+    btn.title = '点击切换 Windows 开机自动启动';
+
+    const baseStyle = [
+      'display: inline-flex',
+      'align-items: center',
+      'gap: 6px',
+      'padding: 5px 10px',
+      'border-radius: 14px',
+      'font-size: 11px',
+      'font-weight: 500',
+      'cursor: pointer',
+      'user-select: none',
+      'transition: all 0.2s ease',
+      'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      'z-index: 9999'
+    ].join(';');
+
+    let isAutoStart = false;
+
+    const updateStyle = (active) => {
+      isAutoStart = Boolean(active);
+      if (isAutoStart) {
+        btn.style.cssText = `${baseStyle}; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4);`;
+        btn.innerHTML = '<span style="font-size:12px">⚡</span><span>自启动: 开</span>';
+      } else {
+        btn.style.cssText = `${baseStyle}; background: rgba(148, 163, 184, 0.12); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.25);`;
+        btn.innerHTML = '<span style="font-size:12px">⚡</span><span>自启动: 关</span>';
+      }
+    };
+
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const nextState = !isAutoStart;
+      const res = await ipcRenderer.invoke('dsh:set-auto-start', nextState);
+      updateStyle(res);
+    });
+
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        btn.click();
+      }
+    });
+
+    ipcRenderer.invoke('dsh:get-auto-start').then(updateStyle).catch(() => updateStyle(false));
+
+    ipcRenderer.on('dsh:auto-start-changed', (_event, enabled) => {
+      updateStyle(enabled);
+    });
+
+    const sidebarContainer = document.querySelector('aside, [data-sidebar], .dsh-sidebar, nav, [class*="sidebar"], [class*="Sidebar"]');
+    if (sidebarContainer) {
+      btn.style.margin = '8px 12px';
+      sidebarContainer.appendChild(btn);
+    } else if (document.body) {
+      btn.style.position = 'fixed';
+      btn.style.bottom = '16px';
+      btn.style.left = '16px';
+      btn.style.boxShadow = '0 2px 10px rgba(0,0,0,0.2)';
+      document.body.appendChild(btn);
+    }
+  }
+
+  mountSidebarAutoStartButton();
+
   let lastNotifyTime = 0;
   const observer = new MutationObserver(() => {
+    if (!document.getElementById('dsh-autostart-toggle')) {
+      mountSidebarAutoStartButton();
+    }
+
     if (!document.hidden && !isWindowBlurred) return;
     const now = Date.now();
     if (now - lastNotifyTime < 8000) return;
