@@ -8,11 +8,10 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node --test \"test/**/*.test.js\"",
+    "test": "node --test test/*.test.js",
     "test:integration": "node --test test/integration.test.js",
     "runtime:prepare": "node prepare-runtime.js",
-    "dist": "npm run runtime:prepare && electron-builder --win",
-    "dist:dir": "npm run runtime:prepare && electron-builder --win --dir"
+    "dist": "npm run runtime:prepare && electron-builder --win"
   },
   "dependencies": {
     "@deepseek-ai/dsh": "0.1.0-rc.6",
@@ -40,16 +39,16 @@
         {
           "target": "nsis",
           "arch": ["x64"]
-        },
-        {
-          "target": "portable",
-          "arch": ["x64"]
         }
       ]
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "DeepSeek Harness"
     }
   }
 }
