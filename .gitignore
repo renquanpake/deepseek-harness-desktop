@@ -1,5 +1,6 @@
 node_modules/
 dist/
 dsh-runtime/
+.gdrive/
 electron.zip
 *.log
