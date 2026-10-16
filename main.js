@@ -17,20 +17,29 @@ const fs = require('fs');
 const os = require('os');
 const http = require('http');
 const https = require('https');
+const net = require('net');
 const stream = require('stream');
 const { promisify } = require('util');
 const { toWslPath } = require('./lib/win-utils');
+const { getAutoStart, setAutoStart } = require('./lib/auto-start');
+const { findAvailablePort, prependPathDirs } = require('./lib/env-utils');
+const { cleanStaleLocks } = require('./lib/lock-cleaner');
 const { isBackendHttp } = require('./lib/trusted-url');
 const { decideRestart, MAX_CRASH_RESTARTS } = require('./lib/backend-lifecycle');
 const { pickWorkspaceMode } = require('./lib/cli-workspace');
 const { runRegCommands } = require('./lib/win-reg');
 const {
+  semverCompare,
   isNewer,
   decideUpdatePlan,
   formatUpdateDescription,
   buildProxyedUrls,
   pickInstallerUrl,
-  downloadWithProxies
+  downloadWithProxies,
+  httpGetJson,
+  checkRemoteCoreVersion: checkCoreFromUrls,
+  checkRemoteShellVersion: checkShellFromUrls,
+  checkRemoteReleaseAssets: checkReleaseFromUrls
 } = require('./lib/updater');
 
 const streamPipeline = promisify(stream.pipeline);
@@ -192,13 +201,30 @@ function isLocalRuntimeUsable() {
   return fs.existsSync(getLocalRuntimeDshCli());
 }
 
+function getLocalDshVersion() {
+  const pkgPath = path.join(LOCAL_RUNTIME_DIR, 'node_modules', '@deepseek-ai', 'dsh', 'package.json');
+  try {
+    return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version || null;
+  } catch {
+    return null;
+  }
+}
+
 function isLocalRuntimeAvailable() {
   if (forceBundledRuntime || Date.now() < localRuntimeBrokenUntil) {
     return false;
   }
+  const markerPath = path.join(LOCAL_RUNTIME_DIR, '.broken-marker.json');
   try {
-    if (fs.existsSync(path.join(LOCAL_RUNTIME_DIR, '.broken-marker.json'))) {
-      return false;
+    if (fs.existsSync(markerPath)) {
+      const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+      const currentVer = getLocalDshVersion();
+      if (currentVer && marker.brokenVersion && semverCompare(currentVer, marker.brokenVersion) > 0) {
+        try { fs.unlinkSync(markerPath); } catch {}
+        localRuntimeBrokenUntil = 0;
+      } else {
+        return false;
+      }
     }
   } catch {}
   return isLocalRuntimeUsable();
@@ -218,19 +244,7 @@ function getRuntimeBinDirs() {
   return dirs;
 }
 
-function prependPathDirs(existingPath, extraDirs) {
-  const separator = process.platform === 'win32' ? ';' : ':';
-  const parts = String(existingPath || '').split(separator).filter(Boolean);
-  const seen = parts.map((item) => item.toLowerCase());
-  for (let index = extraDirs.length - 1; index >= 0; index -= 1) {
-    const dir = extraDirs[index];
-    if (!seen.includes(dir.toLowerCase())) {
-      parts.unshift(dir);
-      seen.unshift(dir.toLowerCase());
-    }
-  }
-  return parts.join(separator);
-}
+// prependPathDirs imported from ./lib/env-utils
 
 function currentRegistryUrl() {
   return UPDATER.REGISTRY + '/';
@@ -245,7 +259,9 @@ function buildBackendEnv() {
     COREPACK_NPM_REGISTRY: currentRegistryUrl(),
     COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
     ADBLOCK: '1',
-    DISABLE_OPENCOLLECTIVE: '1'
+    DISABLE_OPENCOLLECTIVE: '1',
+    NPM_CONFIG_PACKAGE_IMPORT_METHOD: 'copy',
+    NPM_CONFIG_NODE_LINKER: 'hoisted'
   };
   if (PORTABLE_DATA_ROOT) {
     if (PORTABLE_USERPROFILE) env.USERPROFILE = PORTABLE_USERPROFILE;
@@ -305,36 +321,7 @@ function assertTrustedSender(event) {
   }
 }
 
-function cleanStaleLocks(dirPath) {
-  if (!fs.existsSync(dirPath)) return;
-  try {
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(dirPath, entry.name);
-      if (entry.isDirectory() && entry.name !== 'node_modules') {
-        cleanStaleLocks(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith('.lock')) {
-        try {
-          const content = fs.readFileSync(fullPath, 'utf8').trim();
-          const pid = parseInt(content, 10);
-          if (!pid || Number.isNaN(pid)) {
-            fs.unlinkSync(fullPath);
-          } else {
-            try {
-              process.kill(pid, 0);
-            } catch {
-              fs.unlinkSync(fullPath);
-            }
-          }
-        } catch {
-          try { fs.unlinkSync(fullPath); } catch {}
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('[lock-cleaner] Skip error:', err.message);
-  }
-}
+// cleanStaleLocks is imported from ./lib/lock-cleaner
 
 function hydratePresetPluginsIfNeeded() {
   const runtimeDir = getRuntimeDir();
@@ -620,10 +607,20 @@ async function breakLocalRuntimeCircuit(reason) {
     cleanupOldBrokenRuntimeDirs(2);
   } catch (err) {
     try {
+      const brokenVersion = getLocalDshVersion() || 'unknown';
       fs.mkdirSync(LOCAL_RUNTIME_DIR, { recursive: true });
       fs.writeFileSync(
         path.join(LOCAL_RUNTIME_DIR, '.broken-marker.json'),
-        JSON.stringify({ reason, at: new Date().toISOString(), detail: err.message }, null, 2)
+        JSON.stringify(
+          {
+            brokenVersion,
+            reason,
+            at: new Date().toISOString(),
+            detail: err.message
+          },
+          null,
+          2
+        )
       );
     } catch (markerErr) {
       console.warn(`[dsh-watchdog] 写入回退标志文件失败: ${markerErr.message}`);
@@ -677,9 +674,10 @@ function startDshBackend(resetCrash = true) {
   localRuntimeSpawnError = null;
   useLocalRuntime = false;
   if (currentEngine === 'wsl2' && isWindows) {
-    const wslWorkspace = toWslPath(targetWorkspaceDir);
+    const rawWslWorkspace = toWslPath(targetWorkspaceDir);
+    const cleanWslWorkspace = rawWslWorkspace.replace(/^["']|["']$/g, '');
     const safeFlag = isSafeMode ? '--safe-mode' : '';
-    const wslCmd = `cd "${wslWorkspace}" && npx --yes @deepseek-ai/dsh web --port ${currentPort} ${safeFlag}`;
+    const wslCmd = `cd "${cleanWslWorkspace}" && npx --yes @deepseek-ai/dsh web --port ${currentPort} ${safeFlag}`;
     dshProcess = spawn('wsl.exe', ['--', 'bash', '-lc', wslCmd], {
       stdio: 'pipe',
       windowsHide: true,
@@ -824,7 +822,10 @@ function waitForBackendReady(timeoutMs = 30000) {
   });
 }
 
+// findAvailablePort imported from ./lib/env-utils
+
 async function restartWithCurrentConfig() {
+  currentPort = await findAvailablePort(currentPort || 3080);
   startDshBackend();
   const ready = await waitForBackendReady();
   if (mainWindow) {
@@ -904,106 +905,16 @@ const UPDATER = {
   isChecking: false
 };
 
-function httpGetJson(url, timeoutMs = UPDATER.REQUEST_TIMEOUT_MS, redirects = 0) {
-  return new Promise((resolve, reject) => {
-    if (redirects > 8) {
-      return reject(new Error('Too many redirects (exceeded 8) for ' + url));
-    }
-    let parsed;
-    try {
-      parsed = new URL(url);
-    } catch (e) {
-      return reject(e);
-    }
-    const client = parsed.protocol === 'https:' ? https : http;
-    const req = client.get(
-      url,
-      {
-        headers: {
-          'User-Agent': 'deepseek-harness-desktop/1.0 (Windows NT 10.0; Win64; x64)',
-          'Accept': 'application/json, text/plain, */*'
-        }
-      },
-      (res) => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          const nextUrl = new URL(res.headers.location, url).toString();
-          res.resume();
-          return resolve(httpGetJson(nextUrl, timeoutMs, redirects + 1));
-        }
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          res.resume();
-          return reject(new Error('HTTP ' + res.statusCode + ' for ' + url));
-        }
-        let data = '';
-        res.setEncoding('utf8');
-        res.on('data', (chunk) => { data += chunk; });
-        res.on('end', () => {
-          try {
-            resolve(JSON.parse(data));
-          } catch (err) {
-            reject(err);
-          }
-        });
-      }
-    );
-    req.on('error', reject);
-    req.setTimeout(timeoutMs, () => {
-      req.destroy();
-      reject(new Error('Request timeout (' + timeoutMs + 'ms) for ' + url));
-    });
-  });
-}
-
 async function checkRemoteCoreVersion() {
-  for (const url of UPDATER.CORE_REGISTRY_URLS) {
-    try {
-      const data = await httpGetJson(url);
-      if (data && data.version) return data.version;
-    } catch {
-      // try next mirror
-    }
-  }
-  return null;
+  return checkCoreFromUrls(UPDATER.CORE_REGISTRY_URLS);
 }
 
 async function checkRemoteShellVersion() {
-  for (const url of UPDATER.GITHUB_RELEASE_URLS) {
-    try {
-      const data = await httpGetJson(url);
-      if (data && data.tag_name) {
-        const version = String(data.tag_name).replace(/^v/, '');
-        if (version) return version;
-      }
-    } catch {
-      // try next mirror
-    }
-  }
-  for (const url of UPDATER.SHELL_MANIFEST_URLS) {
-    try {
-      const data = await httpGetJson(url);
-      if (data && data.version) return data.version;
-    } catch {
-      // try next mirror
-    }
-  }
-  return null;
+  return checkShellFromUrls(UPDATER.SHELL_MANIFEST_URLS, UPDATER.GITHUB_RELEASE_URLS);
 }
 
 async function checkRemoteReleaseAssets() {
-  for (const url of UPDATER.GITHUB_RELEASE_URLS) {
-    try {
-      const data = await httpGetJson(url);
-      if (data && data.assets && data.assets.length > 0) {
-        const installerUrl = pickInstallerUrl(data.assets);
-        if (installerUrl) {
-          return { tag: data.tag_name, installerUrl };
-        }
-      }
-    } catch {
-      // try next mirror
-    }
-  }
-  return null;
+  return checkReleaseFromUrls(UPDATER.GITHUB_RELEASE_URLS);
 }
 
 function setWindowProgress(title) {
@@ -1092,12 +1003,21 @@ function pruneLocalRuntimeDependencies(names) {
 
 function runPnpmAdd(nodeExe, pnpmCjs, packages) {
   return new Promise((resolve) => {
-    const args = [pnpmCjs, 'add', ...packages, `--registry=${currentRegistryUrl()}`];
+    const args = [
+      pnpmCjs,
+      'add',
+      ...packages,
+      `--registry=${currentRegistryUrl()}`,
+      '--package-import-method=copy',
+      '--node-linker=hoisted'
+    ];
     const pnpmProc = spawn(nodeExe, args, {
       cwd: LOCAL_RUNTIME_DIR,
       env: {
         ...process.env,
         NPM_CONFIG_REGISTRY: currentRegistryUrl(),
+        NPM_CONFIG_PACKAGE_IMPORT_METHOD: 'copy',
+        NPM_CONFIG_NODE_LINKER: 'hoisted',
         NPM_CONFIG_AUDIT: 'false',
         NPM_CONFIG_FUND: 'false'
       },
@@ -1156,6 +1076,12 @@ async function installHotUpdateCore(targetVersion) {
   if (!coreInstalled) {
     throw new Error('DSH 内核热更新失败，请检查网络或稍后重试');
   }
+  const markerFile = path.join(LOCAL_RUNTIME_DIR, '.broken-marker.json');
+  if (fs.existsSync(markerFile)) {
+    try { fs.unlinkSync(markerFile); } catch {}
+  }
+  forceBundledRuntime = false;
+  localRuntimeBrokenUntil = 0;
   const presetPluginNames = readFactoryPresetPluginNames();
   if (presetPluginNames.length) {
     const added = mergeLocalRuntimePresetDependencies(presetPluginNames);
@@ -1325,10 +1251,12 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
             installer.unref();
           } catch (err) {
             dialog.showErrorBox('NSIS 安装启动失败', String(err.message || err));
+            clearWindowProgress();
+            return;
           }
           clearWindowProgress();
           isQuitting = true;
-          setTimeout(() => app.quit(), 500);
+          app.exit(0);
           return;
         }
       }
@@ -1439,6 +1367,18 @@ function createTray() {
         label: '检查更新',
         click: () => runUpdateCheck(false)
       },
+      {
+        label: '开机自动启动',
+        type: 'checkbox',
+        checked: getAutoStart(app),
+        click: (item) => {
+          const result = setAutoStart(app, item.checked);
+          if (mainWindow && mainWindow.webContents) {
+            mainWindow.webContents.send('dsh:auto-start-changed', result);
+          }
+          buildNativeAppMenu();
+        }
+      },
       { type: 'separator' },
       {
         label: '退出 DSH Studio',
@@ -1466,7 +1406,7 @@ function buildNativeAppMenu() {
       label: '工作台 (Studio)',
       submenu: [
         {
-          label: '新建独立 Git Worktree 沙箱会话...',
+          label: '新建独立工作区分支 (Git Worktree)...',
           click: async () => {
             const res = await dialog.showOpenDialog(mainWindow, {
               properties: ['openDirectory'],
@@ -1483,7 +1423,7 @@ function buildNativeAppMenu() {
           }
         },
         {
-          label: '将剪贴板内容投喂至当前输入框 (Alt+Shift+V)',
+          label: '粘贴剪贴板截图/文本至输入框 (Alt+Shift+V)',
           accelerator: 'Alt+Shift+V',
           click: () => {
             feedClipboardIntoEditor();
@@ -1491,16 +1431,27 @@ function buildNativeAppMenu() {
         },
         { type: 'separator' },
         {
-          label: '窗口始终置顶 (伴侣悬浮模式)',
+          label: '窗口始终置顶 (悬浮伴侣模式)',
           type: 'checkbox',
           checked: mainWindow ? mainWindow.isAlwaysOnTop() : false,
           click: (item) => {
             if (mainWindow) mainWindow.setAlwaysOnTop(item.checked);
           }
         },
+        {
+          label: '开机自动启动 (Windows 登录自启)',
+          type: 'checkbox',
+          checked: getAutoStart(app),
+          click: (item) => {
+            const result = setAutoStart(app, item.checked);
+            if (mainWindow && mainWindow.webContents) {
+              mainWindow.webContents.send('dsh:auto-start-changed', result);
+            }
+          }
+        },
         { type: 'separator' },
         {
-          label: '彻底退出 DSH Studio',
+          label: '退出程序',
           click: () => {
             isQuitting = true;
             app.quit();
@@ -1509,7 +1460,7 @@ function buildNativeAppMenu() {
       ]
     },
     {
-      label: '引擎与救援 (Engine & Rescue)',
+      label: '引擎与更新 (Engine & Updates)',
       submenu: [
         {
           label: (() => {
@@ -1534,7 +1485,7 @@ function buildNativeAppMenu() {
         },
         { type: 'separator' },
         {
-          label: '运行引擎：Windows 原生控制台 Node (推荐)',
+          label: '运行引擎：Windows 原生模式 (推荐，速度最快)',
           type: 'radio',
           checked: currentEngine === 'win-native',
           click: async () => {
@@ -1543,7 +1494,7 @@ function buildNativeAppMenu() {
           }
         },
         {
-          label: '运行引擎：本机 WSL2 Linux 宿主桥接',
+          label: '运行引擎：WSL2 兼容模式 (适用于 Linux 依赖工具)',
           type: 'radio',
           checked: currentEngine === 'wsl2',
           click: async () => {
@@ -1562,7 +1513,7 @@ function buildNativeAppMenu() {
         },
         { type: 'separator' },
         {
-          label: '故障隔离安全模式 (--safe-mode 禁用故障插件)',
+          label: '故障排查安全模式 (临时禁用第三方插件)',
           type: 'checkbox',
           checked: isSafeMode,
           click: async (item) => {
@@ -1571,7 +1522,7 @@ function buildNativeAppMenu() {
           }
         },
         {
-          label: '一键重新释放内置 Codex 黄金插件包',
+          label: '恢复出厂预置插件 (重置界面增强组件)',
           click: async () => {
             const markerFile = path.join(DSH_HOME, '.codex-studio-hydrated');
             if (fs.existsSync(markerFile)) fs.unlinkSync(markerFile);
@@ -1585,7 +1536,7 @@ function buildNativeAppMenu() {
       label: 'Windows 系统集成',
       submenu: [
         {
-          label: '注册右键菜单 (Open with DSH / New Git Worktree)',
+          label: '添加 Windows 文件夹右键快捷启动',
           click: () => {
             const result = registerWindowsContextMenu();
             if (result.total === 0) {
@@ -1607,7 +1558,7 @@ function buildNativeAppMenu() {
           }
         },
         {
-          label: '移除右键菜单',
+          label: '移除 Windows 文件夹右键快捷项',
           click: () => {
             const result = unregisterWindowsContextMenu();
             if (result.total === 0) {
@@ -1666,7 +1617,9 @@ function toggleMainWindowVisibility() {
 }
 
 function createMainWindow() {
+  const isHiddenLaunch = process.argv.includes('--hidden') || process.argv.includes('--minimized');
   mainWindow = new BrowserWindow({
+    show: !isHiddenLaunch,
     width: 1440,
     height: 920,
     minWidth: 960,
@@ -1839,6 +1792,21 @@ ipcMain.on('dsh:request-clipboard-paste', (event) => {
     return;
   }
   feedClipboardIntoEditor();
+});
+
+ipcMain.handle('dsh:get-auto-start', (event) => {
+  assertTrustedSender(event);
+  return getAutoStart(app);
+});
+
+ipcMain.handle('dsh:set-auto-start', (event, enable) => {
+  assertTrustedSender(event);
+  const result = setAutoStart(app, Boolean(enable));
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('dsh:auto-start-changed', result);
+  }
+  buildNativeAppMenu();
+  return result;
 });
 
 ipcMain.handle('dsh:convert-to-wsl-path', (event, windowsPath) => {

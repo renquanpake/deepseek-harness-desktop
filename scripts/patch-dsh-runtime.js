@@ -12,50 +12,54 @@
 const fs = require('fs');
 const path = require('path');
 
-const TARGET = path.join(
-  __dirname,
-  '..',
-  'dsh-runtime',
-  'node_modules',
-  '@deepseek-ai',
-  'dsh-host-directory-picker-native',
-  'lib',
-  'worker.cjs'
-);
-
-// 匹配打包产物里的旧实现（兼容 tab/空格缩进与单双引号差异）
 const OLD_PATTERN =
   /function readUtf16\(koffi, address\) \{\s*const bytes = Buffer\.from\(koffi\.view\(address, 32768\)\);\s*let end = 0;\s*while \(end \+ 1 < bytes\.length && bytes\[end\] !== 0\) end \+= 2;\s*return bytes\.toString\("utf16le", 0, end\);\s*\}/;
 
 const NEW_IMPL = `function readUtf16(koffi, address) {
-	if (address === 0n || address === 0 || address === null) return "";
-	const kernel32 = koffi.load("kernel32.dll");
-	const msvcrt = koffi.load("msvcrt.dll");
-	const lstrlenW = kernel32.func("__stdcall", "lstrlenW", "int", ["void *"]);
-	const memcpy = msvcrt.func("memcpy", "void *", ["void *", "void *", "size_t"]);
-	const len = lstrlenW(address);
-	if (len <= 0) return "";
-	const out = Buffer.alloc(len * 2 + 2);
-	memcpy(koffi.address(out, 0), address, len * 2 + 2);
-	return out.toString("utf16le", 0, len * 2);
+\tif (address === 0n || address === 0 || address === null) return "";
+\tconst kernel32 = koffi.load("kernel32.dll");
+\tconst msvcrt = koffi.load("msvcrt.dll");
+\tconst lstrlenW = kernel32.func("__stdcall", "lstrlenW", "int", ["void *"]);
+\tconst memcpy = msvcrt.func("memcpy", "void *", ["void *", "void *", "size_t"]);
+\tconst len = lstrlenW(address);
+\tif (len <= 0) return "";
+\tconst out = Buffer.alloc(len * 2 + 2);
+\tmemcpy(koffi.address(out, 0), address, len * 2 + 2);
+\treturn out.toString("utf16le", 0, len * 2);
 }`;
 
-function main() {
-  if (!fs.existsSync(TARGET)) {
-    console.warn(`[patch-dsh-runtime] 跳过：未找到 ${TARGET}（先运行 runtime:prepare）`);
-    return;
+function applyDirectoryPickerPatch(runtimeDir) {
+  const targetDir = runtimeDir || path.join(__dirname, '..', 'dsh-runtime');
+  const target = path.join(
+    targetDir,
+    'node_modules',
+    '@deepseek-ai',
+    'dsh-host-directory-picker-native',
+    'lib',
+    'worker.cjs'
+  );
+
+  if (!fs.existsSync(target)) {
+    console.warn(`[patch-dsh-runtime] 跳过：未找到 ${target}`);
+    return false;
   }
-  const code = fs.readFileSync(TARGET, 'utf8');
+  const code = fs.readFileSync(target, 'utf8');
   if (!code.includes('koffi.view(address, 32768)')) {
     console.log('[patch-dsh-runtime] worker.cjs 已是安全实现，无需修补');
-    return;
+    return true;
   }
   if (!OLD_PATTERN.test(code)) {
-    console.error('[patch-dsh-runtime] 发现旧实现但模式不匹配，请手动检查 worker.cjs');
-    process.exit(1);
+    console.warn('[patch-dsh-runtime] 发现旧实现但模式不匹配，请手动检查 worker.cjs');
+    return false;
   }
-  fs.writeFileSync(TARGET, code.replace(OLD_PATTERN, NEW_IMPL));
-  console.log('[patch-dsh-runtime] 已应用 readUtf16 安全读取修复 ->', TARGET);
+  fs.writeFileSync(target, code.replace(OLD_PATTERN, NEW_IMPL));
+  console.log('[patch-dsh-runtime] 已应用 readUtf16 安全读取修复 ->', target);
+  return true;
 }
 
-main();
+if (require.main === module) {
+  const customRuntime = process.argv[2] ? path.resolve(process.argv[2]) : null;
+  applyDirectoryPickerPatch(customRuntime);
+}
+
+module.exports = { applyDirectoryPickerPatch };

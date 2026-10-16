@@ -196,6 +196,13 @@ function main() {
     JSON.stringify(manifestData, null, 2)
   );
 
+  try {
+    const { applyDirectoryPickerPatch } = require('./scripts/patch-dsh-runtime');
+    applyDirectoryPickerPatch(RUNTIME_DIR);
+  } catch (err) {
+    console.warn();
+  }
+
   console.log('Runtime preparation completed successfully.');
 }
 
