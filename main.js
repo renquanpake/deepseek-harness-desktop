@@ -34,7 +34,8 @@ const {
   buildProxyedUrls,
   pickInstallerUrl,
   downloadWithProxies,
-  httpGetJson,
+  computeFileSha256,
+  fetchSha256FromUrls,
   checkRemoteCoreVersion: checkCoreFromUrls,
   checkRemoteShellVersion: checkShellFromUrls,
   checkRemoteReleaseAssets: checkReleaseFromUrls
@@ -1223,6 +1224,42 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
         await downloadWithProxies(release.installerUrl, installerPath, (percent) => {
           setWindowProgress(`正在下载客户端外壳更新 (${percent}%)...`);
         }, { proxies: UPDATER.GITHUB_DOWNLOAD_PROXIES, timeoutMs: UPDATER.DOWNLOAD_TIMEOUT_MS });
+
+        const expectedSha256 = await fetchSha256FromUrls(
+          buildProxyedUrls(`${release.installerUrl}.sha256`, UPDATER.GITHUB_DOWNLOAD_PROXIES)
+        );
+        const actualSha256 = computeFileSha256(installerPath);
+        if (expectedSha256) {
+          if (actualSha256 !== expectedSha256) {
+            try { fs.unlinkSync(installerPath); } catch {}
+            clearWindowProgress();
+            dialog.showErrorBox(
+              '安装包校验失败',
+              `下载的安装包 SHA-256 与官方校验文件不一致，已删除该文件并中止更新。\n期望: ${expectedSha256}\n实际: ${actualSha256 || '无法读取'}`
+            );
+            return;
+          }
+          console.log(`[shell-update] SHA-256 校验通过: ${actualSha256}`);
+        } else if (!actualSha256) {
+          clearWindowProgress();
+          dialog.showErrorBox('安装包校验失败', '无法读取已下载的安装包文件，已中止更新。');
+          return;
+        } else {
+          const choice = dialog.showMessageBoxSync(mainWindow, {
+            type: 'warning',
+            title: '无法校验安装包完整性',
+            message: '未能获取官方 SHA-256 校验文件，无法验证安装包完整性。',
+            detail: '该版本发布时可能未附带 .sha256 校验文件。是否仍要继续安装？',
+            buttons: ['取消', '仍然继续'],
+            defaultId: 0,
+            cancelId: 0
+          });
+          if (choice !== 1) {
+            try { fs.unlinkSync(installerPath); } catch {}
+            clearWindowProgress();
+            return;
+          }
+        }
 
         if (isPortable()) {
           const folder = path.dirname(installerPath);
