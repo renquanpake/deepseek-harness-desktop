@@ -1,0 +1,40 @@
+name: Build Windows Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Prepare DSH runtime & patches
+        run: npm run runtime:prepare
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Build Windows installer
+        run: npx electron-builder --win
+
+      - name: Upload Windows Setup Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeepSeek-Harness-Windows-Setup
+          path: dist/*.exe

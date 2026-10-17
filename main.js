@@ -125,7 +125,7 @@ function ensurePortableGitConfig() {
   let content = '';
   try {
     if (fs.existsSync(systemGitConfig)) {
-      content = `[include]\n\tpath = "${systemGitConfig}"\n`;
+      content = `[include]\n\tpath = "${systemGitConfig.replace(/\\/g, "/")}"\n`;
     }
   } catch {
     return;
@@ -393,14 +393,11 @@ function createIsolatedGitWorktree(repoDir) {
 function isProcessAlive(pid) {
   const numericPid = Number(pid);
   if (!Number.isFinite(numericPid) || numericPid <= 0) return false;
-  if (process.platform === 'win32') {
-    return true;
-  }
   try {
     process.kill(numericPid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    return err.code === 'EPERM';
   }
 }
 
@@ -1339,20 +1336,10 @@ function getTrayIconPath() {
   return null;
 }
 
-function createTray() {
-  if (tray) return;
-  const iconPath = getTrayIconPath();
-  if (!iconPath) {
-    console.warn('[tray] No tray icon found, skipping tray creation');
-    return;
-  }
+function updateTrayMenu() {
+  if (!tray) return;
   try {
-    const icon = nativeImage.createFromPath(iconPath);
-    if (icon.isEmpty()) {
-      console.warn('[tray] Tray icon is empty, skipping tray creation');
-      return;
-    }
-    tray = new Tray(icon);
+    const isAuto = getAutoStart(app);
     const menu = Menu.buildFromTemplate([
       {
         label: '显示主窗口',
@@ -1370,13 +1357,14 @@ function createTray() {
       {
         label: '开机自动启动',
         type: 'checkbox',
-        checked: getAutoStart(app),
+        checked: isAuto,
         click: (item) => {
           const result = setAutoStart(app, item.checked);
           if (mainWindow && mainWindow.webContents) {
             mainWindow.webContents.send('dsh:auto-start-changed', result);
           }
           buildNativeAppMenu();
+          updateTrayMenu();
         }
       },
       { type: 'separator' },
@@ -1389,6 +1377,26 @@ function createTray() {
       }
     ]);
     tray.setContextMenu(menu);
+  } catch (err) {
+    console.warn(`[tray] 更新托盘菜单异常: ${err.message}`);
+  }
+}
+
+function createTray() {
+  if (tray) return;
+  const iconPath = getTrayIconPath();
+  if (!iconPath) {
+    console.warn('[tray] No tray icon found, skipping tray creation');
+    return;
+  }
+  try {
+    const icon = nativeImage.createFromPath(iconPath);
+    if (icon.isEmpty()) {
+      console.warn('[tray] Tray icon is empty, skipping tray creation');
+      return;
+    }
+    tray = new Tray(icon);
+    updateTrayMenu();
     tray.on('click', () => {
       if (mainWindow) {
         mainWindow.show();
@@ -1447,6 +1455,8 @@ function buildNativeAppMenu() {
             if (mainWindow && mainWindow.webContents) {
               mainWindow.webContents.send('dsh:auto-start-changed', result);
             }
+            buildNativeAppMenu();
+            updateTrayMenu();
           }
         },
         { type: 'separator' },
@@ -1657,6 +1667,11 @@ function createMainWindow() {
   });
   mainWindow.on('close', (event) => {
     if (isQuitting || !isWindowsPlatform()) return;
+    if (!tray) {
+      isQuitting = true;
+      app.quit();
+      return;
+    }
     event.preventDefault();
     if (targetWorkspaceIsWorktree) {
       handleWorktreeWindowClose();
@@ -1806,6 +1821,7 @@ ipcMain.handle('dsh:set-auto-start', (event, enable) => {
     mainWindow.webContents.send('dsh:auto-start-changed', result);
   }
   buildNativeAppMenu();
+  updateTrayMenu();
   return result;
 });
 

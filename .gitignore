@@ -1,6 +1,30 @@
+# Dependencies
 node_modules/
+.pnpm-store/
+
+# Build artifacts & runtime hydration
 dist/
 dsh-runtime/
-.gdrive/
-electron.zip
+dsh-home/
+default-profile/
+
+# Temporary & backup files
+*.bak
+*.old
+*.old.js
+*.stage*.js
+*.tmp
+.broken-marker.json
+
+# Logs
 *.log
+npm-debug.log*
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# AI agent tooling (do not commit)
+.gdrive/
+.monkeycode/
+
