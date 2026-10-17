@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node --test test/*.test.js",
+    "test": "node --test test/*.test.js test/preset-hydrator.test.js test/self-repair.test.js",
     "test:integration": "node --test test/integration.test.js",
     "runtime:prepare": "node prepare-runtime.js",
     "dist": "npm run runtime:prepare && electron-builder --win"
@@ -27,6 +27,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "shell/",
       "lib/",
       "package.json",
       "build/",
@@ -36,7 +37,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
@@ -46,7 +49,7 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "DeepSeek Harness"
+      "shortcutName": "DeepSeek Harness Studio"
     }
   }
 }

@@ -24,6 +24,8 @@ const { toWslPath } = require('./lib/win-utils');
 const { getAutoStart, setAutoStart } = require('./lib/auto-start');
 const { findAvailablePort, prependPathDirs } = require('./lib/env-utils');
 const { cleanStaleLocks } = require('./lib/lock-cleaner');
+const { hydratePresetPlugins } = require('./lib/preset-hydrator');
+const { runSelfRepair } = require('./lib/self-repair');
 const { isBackendHttp } = require('./lib/trusted-url');
 const { decideRestart, MAX_CRASH_RESTARTS } = require('./lib/backend-lifecycle');
 const { pickWorkspaceMode } = require('./lib/cli-workspace');
@@ -326,14 +328,9 @@ function assertTrustedSender(event) {
 function hydratePresetPluginsIfNeeded() {
   const runtimeDir = getRuntimeDir();
   const presetProfile = path.join(runtimeDir, 'default-profile');
-  const markerFile = path.join(DSH_HOME, '.codex-studio-hydrated');
-  if (!fs.existsSync(presetProfile) || fs.existsSync(markerFile)) return;
-  try {
-    fs.mkdirSync(DSH_HOME, { recursive: true });
-    fs.cpSync(presetProfile, DSH_HOME, { recursive: true, force: false });
-    fs.writeFileSync(markerFile, new Date().toISOString());
-  } catch (err) {
-    console.warn('[preset-hydrator] Warning:', err.message);
+  const res = hydratePresetPlugins(presetProfile, DSH_HOME);
+  if (res.hydrated) {
+    console.log();
   }
 }
 
@@ -722,10 +719,22 @@ function startDshBackend(resetCrash = true) {
   armLocalRuntimeWatchdog(proc);
 
   if (proc.stdout) {
-    proc.stdout.on('data', (chunk) => console.log(`[dsh] ${String(chunk)}`));
+    proc.stdout.on('data', (chunk) => {
+      const line = String(chunk);
+      console.log(`[dsh] ${line}`);
+      if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('dsh:runtime-log', line);
+      }
+    });
   }
   if (proc.stderr) {
-    proc.stderr.on('data', (chunk) => console.warn(`[dsh] ${String(chunk)}`));
+    proc.stderr.on('data', (chunk) => {
+      const line = String(chunk);
+      console.warn(`[dsh] ${line}`);
+      if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('dsh:runtime-log', line);
+      }
+    });
   }
 
   proc.on('error', (err) => {
@@ -825,9 +834,12 @@ async function restartWithCurrentConfig() {
   currentPort = await findAvailablePort(currentPort || 3080);
   startDshBackend();
   const ready = await waitForBackendReady();
-  if (mainWindow) {
-    mainWindow.loadURL(`http://127.0.0.1:${currentPort}`);
+  if (mainWindow && mainWindow.webContents) {
+    if (ready) {
+      mainWindow.webContents.send('dsh:backend-ready', `http://127.0.0.1:${currentPort}`, currentPort);
+    }
     buildNativeAppMenu();
+    updateTrayMenu();
   }
   return ready;
 }
@@ -1628,6 +1640,7 @@ function toggleMainWindowVisibility() {
 
 function createMainWindow() {
   const isHiddenLaunch = process.argv.includes('--hidden') || process.argv.includes('--minimized');
+  const isWindows = process.platform === 'win32';
   mainWindow = new BrowserWindow({
     show: !isHiddenLaunch,
     width: 1440,
@@ -1635,15 +1648,23 @@ function createMainWindow() {
     minWidth: 960,
     minHeight: 640,
     title: `DeepSeek Harness Studio — ${targetWorkspaceDir}`,
-    autoHideMenuBar: false,
+    autoHideMenuBar: true,
+    titleBarStyle: isWindows ? 'hidden' : 'default',
+    titleBarOverlay: isWindows ? {
+      color: '#18181b',
+      symbolColor: '#a1a1aa',
+      height: 38
+    } : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: false,
+      webviewTag: true
     }
   });
   buildNativeAppMenu();
+  mainWindow.loadFile(path.join(__dirname, 'shell', 'index.html'));
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isBackendHttp(url, currentPort)) {
       return { action: 'allow' };
@@ -1763,8 +1784,50 @@ ipcMain.handle('dsh:get-runtime-info', (event) => {
     engine: currentEngine,
     safeMode: isSafeMode,
     home: DSH_HOME,
-    workspace: targetWorkspaceDir
+    workspaceDir: targetWorkspaceDir
   };
+});
+
+ipcMain.handle('dsh:get-backend-status', () => {
+  return {
+    ready: isBackendHttp(`http://127.0.0.1:${currentPort}`, currentPort),
+    url: `http://127.0.0.1:${currentPort}`,
+    port: currentPort,
+    engine: currentEngine,
+    workspaceDir: targetWorkspaceDir
+  };
+});
+
+ipcMain.handle('dsh:set-always-on-top', (_event, enable) => {
+  if (mainWindow) {
+    mainWindow.setAlwaysOnTop(Boolean(enable));
+  }
+  return Boolean(enable);
+});
+
+ipcMain.handle('dsh:get-plugin-inventory', () => {
+  const names = readFactoryPresetPluginNames();
+  return { plugins: names };
+});
+
+ipcMain.handle('dsh:rehydrate-plugins', () => {
+  hydratePresetPluginsIfNeeded();
+  return { ok: true };
+});
+
+ipcMain.handle('dsh:create-worktree-dialog', async () => {
+  const res = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: '选择 Git 仓库目录以自动创建隔离 Worktree'
+  });
+  if (!res.canceled && res.filePaths[0]) {
+    const session = createIsolatedGitWorktree(res.filePaths[0]);
+    if (session.created) {
+      switchWorkspace(session.worktreePath, session);
+      await restartWithCurrentConfig();
+    }
+  }
+  return { ok: true };
 });
 
 ipcMain.handle('dsh:switch-engine', async (event, mode) => {
@@ -1838,6 +1901,20 @@ ipcMain.handle('dsh:get-workspace-status', (event) => {
     worktreeBranch: activeWorktreeSession.branchName,
     engine: currentEngine
   };
+});
+
+ipcMain.handle('dsh:run-self-repair', async () => {
+  console.log('[self-repair] 触发自动检修与自愈...');
+  const report = runSelfRepair({
+    dshHome: DSH_HOME,
+    runtimeDir: getRuntimeDir(),
+    killOrphanProcess: () => killProcessTree()
+  });
+  const ready = await restartWithCurrentConfig();
+  report.ready = ready;
+  report.port = currentPort;
+  report.url = 'http://127.0.0.1:' + currentPort;
+  return report;
 });
 
 ipcMain.handle('dsh:check-update', () => {

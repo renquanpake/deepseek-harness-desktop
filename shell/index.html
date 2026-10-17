@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeepSeek Harness</title>
+  <link rel="stylesheet" href="shell.css">
+</head>
+<body class="theme-dark">
+  <!-- 1. 沉浸式极简标题栏 -->
+  <header id="shell-titlebar">
+    <div class="titlebar-left">
+      <div class="app-brand">
+        <span class="brand-logo">⚡</span>
+        <span class="brand-name">DeepSeek Harness</span>
+      </div>
+    </div>
+
+    <div class="titlebar-right">
+      <button class="tool-btn" id="btn-pin-window" title="窗口置顶">
+        <span class="btn-icon">📌</span>
+      </button>
+      <div class="autostart-pill" id="btn-autostart-toggle" role="button" tabindex="0" title="点击切换开机自动启动">
+        <span class="dot"></span>
+        <span id="label-autostart-status">自启动: 关</span>
+      </div>
+      <!-- Windows 系统控制按钮占位区 -->
+      <div class="window-controls-placeholder"></div>
+    </div>
+  </header>
+
+  <!-- 2. 主体工作区容器 -->
+  <div id="shell-body">
+    <!-- 左侧极简导航轨 (48px) -->
+    <aside id="shell-rail">
+      <div class="rail-group top-actions">
+        <button class="rail-item active" data-tab="chat" id="tab-chat" title="AI 对话与工作台">
+          <span class="rail-icon">💬</span>
+          <span class="rail-label">对话</span>
+        </button>
+        <button class="rail-item" data-tab="plugins" id="tab-plugins" title="插件市场与扩展">
+          <span class="rail-icon">🧩</span>
+          <span class="rail-label">插件</span>
+        </button>
+      </div>
+
+      <div class="rail-group bottom-actions">
+        <button class="rail-item" data-tab="settings" id="tab-settings" title="通用设置与体检">
+          <span class="rail-icon">⚙️</span>
+          <span class="rail-label">设置</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- 极简侧边抽屉面板 -->
+    <div id="shell-drawer" class="drawer-hidden">
+      <div class="drawer-header">
+        <h3 id="drawer-title">面板</h3>
+        <button class="drawer-close-btn" id="btn-close-drawer">✕</button>
+      </div>
+      <div class="drawer-content" id="drawer-content-area"></div>
+    </div>
+
+    <!-- 中央核心视图区域 -->
+    <main id="shell-main">
+      <!-- 极简启动过渡屏 (带超时自动检修区) -->
+      <div id="core-splash-screen">
+        <div class="splash-card">
+          <div class="splash-logo">⚡</div>
+          <h2 class="splash-title">DeepSeek Harness</h2>
+          <p class="splash-desc" id="splash-status-text">正在启动本地 AI 工作台...</p>
+          <div class="splash-progress-track">
+            <div class="splash-progress-bar" id="splash-progress-bar"></div>
+          </div>
+          <!-- 启动超时自动检修触发区 -->
+          <div id="splash-repair-area" style="display:none; margin-top:16px;">
+            <p id="splash-repair-tip" style="font-size:12px; color:var(--accent-amber); margin-bottom:10px;">
+              检测到启动耗时偏长，正在自动检修并自愈环境...
+            </p>
+            <button id="btn-splash-manual-repair" style="padding:6px 14px; background:var(--accent-blue); color:#fff; border:none; border-radius:6px; font-size:12px; cursor:pointer;">
+              🩺 一键自动修复并重新启动
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 内嵌核心 Web 视图 -->
+      <webview
+        id="dsh-core-view"
+        src="about:blank"
+        allowpopups="true"
+        partition="persist:dsh-core"
+        class="core-view-hidden"
+      ></webview>
+    </main>
+  </div>
+
+  <!-- 3. 极简底部状态栏 -->
+  <footer id="shell-statusbar">
+    <div class="status-left">
+      <span class="status-item clickable" id="status-backend-indicator" title="点击一键运行系统体检与自动修复">
+        <span class="status-dot dot-pending" id="status-dot"></span>
+        <span id="status-backend-text">正在启动...</span>
+      </span>
+      <span class="status-separator">|</span>
+      <span class="status-item clickable" id="status-repair-btn" title="点击执行环境自动检修与自愈">🩺 自动检修</span>
+    </div>
+
+    <div class="status-right">
+      <span class="status-item" id="status-core-version">DeepSeek Harness v0.1.0</span>
+      <span class="status-separator">|</span>
+      <span class="status-item clickable" id="status-update-check" title="点击检查更新">检查更新</span>
+    </div>
+  </footer>
+
+  <!-- 4. 自动检修与自愈体检弹窗 -->
+  <div id="repair-modal" class="modal-backdrop modal-hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span class="modal-icon">🩺</span>
+          <span>环境自动检修与自愈</span>
+        </div>
+        <button class="modal-close" id="btn-close-repair-modal" title="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          一键排查并自动修复残留死锁、端口冲突、熔断阻塞及预置插件配置漂移。
+        </p>
+
+        <div class="repair-checklist" id="repair-checklist">
+          <div class="repair-step" id="step-lock">
+            <span class="step-status">⏳</span>
+            <span class="step-label">检查并清理异常残留的进程锁文件 (.lock)</span>
+          </div>
+          <div class="repair-step" id="step-marker">
+            <span class="step-status">⏳</span>
+            <span class="step-label">检查并解除临时熔断与崩溃阻塞标记</span>
+          </div>
+          <div class="repair-step" id="step-plugin">
+            <span class="step-status">⏳</span>
+            <span class="step-label">深度校准并补齐出厂官方增强插件</span>
+          </div>
+          <div class="repair-step" id="step-backend">
+            <span class="step-status">⏳</span>
+            <span class="step-label">探测可用端口并平滑重连 AI 工作台</span>
+          </div>
+        </div>
+
+        <div class="repair-result-banner" id="repair-result-banner" style="display:none;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-modal secondary" id="btn-cancel-repair">关闭</button>
+        <button class="btn-modal primary" id="btn-start-repair">开始自动检修与修复</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="shell.js"></script>
+</body>
+</html>
