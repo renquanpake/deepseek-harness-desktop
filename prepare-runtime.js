@@ -124,17 +124,29 @@ function main() {
     process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
   );
 
+  const binDir = path.join(RUNTIME_DIR, 'node_modules', '.bin');
+  const pnpmBinDir = path.join(RUNTIME_DIR, 'node_modules', 'pnpm', 'bin');
+  const extraPath = [binDir, pnpmBinDir, RUNTIME_DIR].join(path.delimiter);
+  const pluginEnv = {
+    ...process.env,
+    PATH: `${extraPath}${path.delimiter}${process.env.PATH || ''}`,
+    DSH_HOME: PRESET_PROFILE_DIR,
+    NPM_CONFIG_REGISTRY: NPM_MIRROR_REGISTRY,
+    COREPACK_NPM_REGISTRY: NPM_MIRROR_REGISTRY,
+    NPM_CONFIG_NODE_LINKER: 'hoisted',
+    NPM_CONFIG_PACKAGE_IMPORT_METHOD: 'copy',
+    NPM_CONFIG_AUDIT: 'false',
+    NPM_CONFIG_FUND: 'false'
+  };
+
   const installedPlugins = [];
 
   const tryInstallPlugin = (name) => {
     console.log(`[prepare-runtime] Pre-installing plugin: ${name}`);
-    execSync(`"${dshBin}" plugin --profile web add ${name}`, {
+    execSync(`"${dshBin}" plugin --profile web add ${name} --package-import-method=copy --node-linker=hoisted`, {
       cwd: RUNTIME_DIR,
       stdio: 'inherit',
-      env: {
-        ...process.env,
-        DSH_HOME: PRESET_PROFILE_DIR
-      }
+      env: pluginEnv
     });
     installedPlugins.push(name);
   };

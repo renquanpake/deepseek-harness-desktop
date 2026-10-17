@@ -24,7 +24,6 @@ npm-debug.log*
 Thumbs.db
 .DS_Store
 
-# AI agent tooling (do not commit)
+# AI agent tooling
 .gdrive/
 .monkeycode/
-
