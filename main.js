@@ -24,9 +24,9 @@ const { toWslPath } = require('./lib/win-utils');
 const { getAutoStart, setAutoStart } = require('./lib/auto-start');
 const { findAvailablePort, prependPathDirs } = require('./lib/env-utils');
 const { cleanStaleLocks } = require('./lib/lock-cleaner');
-const { hydratePresetPlugins } = require('./lib/preset-hydrator');
+const { hydratePresetPlugins, readJsonSafe } = require('./lib/preset-hydrator');
 const { runSelfRepair } = require('./lib/self-repair');
-const { isBackendHttp } = require('./lib/trusted-url');
+const { isBackendHttp, isTrustedSender } = require('./lib/trusted-url');
 const { decideRestart, MAX_CRASH_RESTARTS } = require('./lib/backend-lifecycle');
 const { pickWorkspaceMode } = require('./lib/cli-workspace');
 const { runRegCommands } = require('./lib/win-reg');
@@ -317,8 +317,8 @@ function getCurrentDshVersion() {
 }
 
 function assertTrustedSender(event) {
-  const frameUrl = event.senderFrame ? event.senderFrame.url : '';
-  if (!isBackendHttp(frameUrl, currentPort)) {
+  if (!isTrustedSender(event, currentPort, mainWindow)) {
+    const frameUrl = event.senderFrame ? event.senderFrame.url : '';
     throw new Error(`Untrusted IPC sender: ${frameUrl}`);
   }
 }
@@ -330,7 +330,7 @@ function hydratePresetPluginsIfNeeded() {
   const presetProfile = path.join(runtimeDir, 'default-profile');
   const res = hydratePresetPlugins(presetProfile, DSH_HOME);
   if (res.hydrated) {
-    console.log();
+    console.log('[preset] 已深度校准并补齐出厂增强插件配置');
   }
 }
 
@@ -942,14 +942,7 @@ function getShellVersion() {
   }
 }
 
-function readJsonSafe(filePath) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    return parsed && typeof parsed === 'object' ? parsed : null;
-  } catch {
-    return null;
-  }
-}
+// readJsonSafe is imported from ./lib/preset-hydrator
 
 function readFactoryPresetPluginNames() {
   const runtimeDir = getBundledRuntimeDir();
@@ -1659,7 +1652,7 @@ function createMainWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       webviewTag: true
     }
   });
@@ -1788,7 +1781,8 @@ ipcMain.handle('dsh:get-runtime-info', (event) => {
   };
 });
 
-ipcMain.handle('dsh:get-backend-status', () => {
+ipcMain.handle('dsh:get-backend-status', (event) => {
+  assertTrustedSender(event);
   return {
     ready: isBackendHttp(`http://127.0.0.1:${currentPort}`, currentPort),
     url: `http://127.0.0.1:${currentPort}`,
@@ -1798,24 +1792,28 @@ ipcMain.handle('dsh:get-backend-status', () => {
   };
 });
 
-ipcMain.handle('dsh:set-always-on-top', (_event, enable) => {
+ipcMain.handle('dsh:set-always-on-top', (event, enable) => {
+  assertTrustedSender(event);
   if (mainWindow) {
     mainWindow.setAlwaysOnTop(Boolean(enable));
   }
   return Boolean(enable);
 });
 
-ipcMain.handle('dsh:get-plugin-inventory', () => {
+ipcMain.handle('dsh:get-plugin-inventory', (event) => {
+  assertTrustedSender(event);
   const names = readFactoryPresetPluginNames();
   return { plugins: names };
 });
 
-ipcMain.handle('dsh:rehydrate-plugins', () => {
+ipcMain.handle('dsh:rehydrate-plugins', (event) => {
+  assertTrustedSender(event);
   hydratePresetPluginsIfNeeded();
   return { ok: true };
 });
 
-ipcMain.handle('dsh:create-worktree-dialog', async () => {
+ipcMain.handle('dsh:create-worktree-dialog', async (event) => {
+  assertTrustedSender(event);
   const res = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
     title: '选择 Git 仓库目录以自动创建隔离 Worktree'
@@ -1903,7 +1901,8 @@ ipcMain.handle('dsh:get-workspace-status', (event) => {
   };
 });
 
-ipcMain.handle('dsh:run-self-repair', async () => {
+ipcMain.handle('dsh:run-self-repair', async (event) => {
+  assertTrustedSender(event);
   console.log('[self-repair] 触发自动检修与自愈...');
   const report = runSelfRepair({
     dshHome: DSH_HOME,
@@ -1917,7 +1916,8 @@ ipcMain.handle('dsh:run-self-repair', async () => {
   return report;
 });
 
-ipcMain.handle('dsh:check-update', () => {
+ipcMain.handle('dsh:check-update', (event) => {
+  assertTrustedSender(event);
   runUpdateCheck(false);
   return { ok: true };
 });

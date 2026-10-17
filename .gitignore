@@ -14,7 +14,15 @@ default-profile/
 *.old.js
 *.stage*.js
 *.tmp
+*.patch
 .broken-marker.json
+
+# Internal tooling, guides & credentials
+.monkeycode/
+.gdrive/
+docs/superpowers/
+README_PUSH_GUIDE.md
+CHANGELOG_AI.md
 
 # Logs
 *.log
@@ -23,7 +31,3 @@ npm-debug.log*
 # OS files
 Thumbs.db
 .DS_Store
-
-# AI agent tooling
-.gdrive/
-.monkeycode/
