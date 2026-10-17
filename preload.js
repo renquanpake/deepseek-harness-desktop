@@ -31,15 +31,12 @@ window.addEventListener('DOMContentLoaded', () => {
     return originalRAF(callback);
   };
 
-  function mountSidebarAutoStartButton() {
-    if (document.getElementById('dsh-autostart-toggle')) return;
+  let isAutoStart = false;
+  let autoStartBtn = null;
 
-    const btn = document.createElement('div');
-    btn.id = 'dsh-autostart-toggle';
-    btn.setAttribute('role', 'button');
-    btn.setAttribute('tabindex', '0');
-    btn.title = '点击切换 Windows 开机自动启动';
-
+  const updateStyle = (active) => {
+    isAutoStart = Boolean(active);
+    if (!autoStartBtn) return;
     const baseStyle = [
       'display: inline-flex',
       'align-items: center',
@@ -55,75 +52,111 @@ window.addEventListener('DOMContentLoaded', () => {
       'z-index: 9999'
     ].join(';');
 
-    let isAutoStart = false;
+    if (isAutoStart) {
+      autoStartBtn.style.cssText = `${baseStyle}; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4);`;
+      autoStartBtn.innerHTML = '<span style="font-size:12px">⚡</span><span>自启动: 开</span>';
+    } else {
+      autoStartBtn.style.cssText = `${baseStyle}; background: rgba(148, 163, 184, 0.12); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.25);`;
+      autoStartBtn.innerHTML = '<span style="font-size:12px">⚡</span><span>自启动: 关</span>';
+    }
+  };
 
-    const updateStyle = (active) => {
-      isAutoStart = Boolean(active);
-      if (isAutoStart) {
-        btn.style.cssText = `${baseStyle}; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4);`;
-        btn.innerHTML = '<span style="font-size:12px">⚡</span><span>自启动: 开</span>';
-      } else {
-        btn.style.cssText = `${baseStyle}; background: rgba(148, 163, 184, 0.12); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.25);`;
-        btn.innerHTML = '<span style="font-size:12px">⚡</span><span>自启动: 关</span>';
-      }
-    };
+  // Register listener ONCE globally to prevent EventEmitter leaks
+  ipcRenderer.on('dsh:auto-start-changed', (_event, enabled) => {
+    updateStyle(enabled);
+  });
 
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const nextState = !isAutoStart;
-      const res = await ipcRenderer.invoke('dsh:set-auto-start', nextState);
-      updateStyle(res);
-    });
+  function mountSidebarAutoStartButton() {
+    if (!autoStartBtn) {
+      autoStartBtn = document.createElement('div');
+      autoStartBtn.id = 'dsh-autostart-toggle';
+      autoStartBtn.setAttribute('role', 'button');
+      autoStartBtn.setAttribute('tabindex', '0');
+      autoStartBtn.title = '点击切换 Windows 开机自动启动';
 
-    btn.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        btn.click();
-      }
-    });
+      autoStartBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const nextState = !isAutoStart;
+        const res = await ipcRenderer.invoke('dsh:set-auto-start', nextState);
+        updateStyle(res);
+      });
 
-    ipcRenderer.invoke('dsh:get-auto-start').then(updateStyle).catch(() => updateStyle(false));
+      autoStartBtn.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          autoStartBtn.click();
+        }
+      });
 
-    ipcRenderer.on('dsh:auto-start-changed', (_event, enabled) => {
-      updateStyle(enabled);
-    });
+      ipcRenderer.invoke('dsh:get-auto-start').then(updateStyle).catch(() => updateStyle(false));
+    }
 
-    const sidebarContainer = document.querySelector('aside, [data-sidebar], .dsh-sidebar, nav, [class*="sidebar"], [class*="Sidebar"]');
+    const sidebarContainer = document.querySelector(
+      'aside, [data-sidebar], .dsh-sidebar, nav, [class*="sidebar"], [class*="Sidebar"]'
+    );
+
     if (sidebarContainer) {
-      btn.style.margin = '8px 12px';
-      sidebarContainer.appendChild(btn);
-    } else if (document.body) {
-      btn.style.position = 'fixed';
-      btn.style.bottom = '16px';
-      btn.style.left = '16px';
-      btn.style.boxShadow = '0 2px 10px rgba(0,0,0,0.2)';
-      document.body.appendChild(btn);
+      if (autoStartBtn.parentElement !== sidebarContainer) {
+        autoStartBtn.style.position = '';
+        autoStartBtn.style.bottom = '';
+        autoStartBtn.style.left = '';
+        autoStartBtn.style.boxShadow = '';
+        autoStartBtn.style.margin = '8px 12px';
+        sidebarContainer.appendChild(autoStartBtn);
+      }
+    } else if (!autoStartBtn.parentElement && document.body) {
+      autoStartBtn.style.position = 'fixed';
+      autoStartBtn.style.bottom = '16px';
+      autoStartBtn.style.left = '16px';
+      autoStartBtn.style.boxShadow = '0 2px 10px rgba(0,0,0,0.2)';
+      document.body.appendChild(autoStartBtn);
     }
   }
 
   mountSidebarAutoStartButton();
 
   let lastNotifyTime = 0;
-  const observer = new MutationObserver(() => {
-    if (!document.getElementById('dsh-autostart-toggle')) {
-      mountSidebarAutoStartButton();
-    }
+  let observerScheduled = false;
+
+  const checkApprovalPrompts = () => {
+    observerScheduled = false;
+    mountSidebarAutoStartButton();
 
     if (!document.hidden && !isWindowBlurred) return;
     const now = Date.now();
     if (now - lastNotifyTime < 8000) return;
-    const bodyText = document.body ? document.body.innerText : '';
-    const needsApproval =
-      bodyText.includes('Approve') ||
-      bodyText.includes('Allow execution') ||
-      bodyText.includes('等待审批') ||
-      bodyText.includes('允许执行');
+
+    // Targeted query instead of costly document.body.innerText reflow
+    const modalOrButtons = document.querySelectorAll(
+      'button, [role="dialog"], [role="alertdialog"], .modal, [class*="modal"], [class*="confirm"]'
+    );
+    let needsApproval = false;
+    for (const el of modalOrButtons) {
+      const text = el.textContent || '';
+      if (
+        text.includes('Approve') ||
+        text.includes('Allow execution') ||
+        text.includes('等待审批') ||
+        text.includes('允许执行')
+      ) {
+        needsApproval = true;
+        break;
+      }
+    }
+
     if (needsApproval) {
       lastNotifyTime = now;
       ipcRenderer.send('dsh:native-notify', {
         title: 'DeepSeek Harness 等待指令审批',
         body: '后台 Agent 正在请求执行工具或 Shell 命令，点击立即返回窗口处理。'
       });
+    }
+  };
+
+  const observer = new MutationObserver(() => {
+    if (!observerScheduled) {
+      observerScheduled = true;
+      setTimeout(checkApprovalPrompts, 300); // 300ms throttle
     }
   });
 

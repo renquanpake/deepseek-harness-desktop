@@ -8,7 +8,7 @@ echo   DeepSeek Harness 桌面端 - 一键全自动部署与打包向导
 echo ========================================================
 echo.
 echo [说明] 本脚本将全自动完成所有步骤：
-echo        1. 环境检测与高速源配置
+echo        1. 环境检测与全链路高速国内镜像配置 (npm/Electron/NSIS)
 echo        2. 依赖自动下载与内核初始化
 echo        3. 自动生成 Windows 极简一键安装包 (.exe)
 echo        4. 自动弹出安装包目录，可一键直接安装
@@ -31,11 +31,13 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo [1/4] 正在配置国内高速镜像源 (npmmirror)...
+echo [1/4] 正在配置全链路国内高速镜像源 (npmmirror 淘宝源)...
 call npm config set registry https://registry.npmmirror.com
+set "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/"
+set "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/"
 
 echo.
-echo [2/4] 正在全自动安装项目与构建依赖 (仅首次需下载)...
+echo [2/4] 正在全自动安装项目与构建依赖 (通过国内源高速下载)...
 call npm install --registry=https://registry.npmmirror.com
 if %errorlevel% neq 0 (
     echo [错误] 依赖安装失败，请检查网络连接后重试。
