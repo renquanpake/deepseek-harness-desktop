@@ -212,7 +212,7 @@ function main() {
     const { applyDirectoryPickerPatch } = require('./scripts/patch-dsh-runtime');
     applyDirectoryPickerPatch(RUNTIME_DIR);
   } catch (err) {
-    console.warn();
+    console.warn('[prepare-runtime] Failed to apply directory picker patch:', err.message);
   }
 
   console.log('Runtime preparation completed successfully.');

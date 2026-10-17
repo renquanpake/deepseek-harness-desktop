@@ -45,15 +45,15 @@ test('decideUpdatePlan: null remote treated as no update', () => {
   });
 });
 
-test('buildProxyedUrls: chains prefixes and appends original', () => {
+test('buildProxyedUrls: official URL is first, followed by proxy fallbacks', () => {
   const out = buildProxyedUrls('https://raw.githubusercontent.com/foo/bar', [
     'https://ghfast.top/',
     'https://mirror.ghproxy.com/'
   ]);
   assert.deepStrictEqual(out, [
+    'https://raw.githubusercontent.com/foo/bar',
     'https://ghfast.top/https://raw.githubusercontent.com/foo/bar',
-    'https://mirror.ghproxy.com/https://raw.githubusercontent.com/foo/bar',
-    'https://raw.githubusercontent.com/foo/bar'
+    'https://mirror.ghproxy.com/https://raw.githubusercontent.com/foo/bar'
   ]);
 });
 
@@ -62,8 +62,8 @@ test('buildProxyedUrls: handles prefix without trailing slash', () => {
     'https://ghfast.top'
   ]);
   assert.deepStrictEqual(out, [
-    'https://ghfast.top/https://github.com/x/y.exe',
-    'https://github.com/x/y.exe'
+    'https://github.com/x/y.exe',
+    'https://ghfast.top/https://github.com/x/y.exe'
   ]);
 });
 
@@ -73,9 +73,8 @@ test('buildProxyedUrls: handles relative baseUrl without double slash', () => {
     'https://ghfast.top'
   ]);
   assert.deepStrictEqual(out, [
-    'https://ghfast.top/foo/bar.exe',
-    'https://ghfast.top/foo/bar.exe',
-    '/foo/bar.exe'
+    '/foo/bar.exe',
+    'https://ghfast.top/foo/bar.exe'
   ]);
 });
 

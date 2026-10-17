@@ -159,14 +159,14 @@ test('5. 更新计划: 真实版本数据', async () => {
   }
 });
 
-test('6. 代理 URL 构建: 真实代理配置', () => {
+test('6. 代理 URL 构建: 真实代理配置 (官方源优先安全策略)', () => {
   const url = 'https://github.com/renquanpake/deepseek-harness-desktop/releases/download/v0.1.0/app.exe';
   const urls = buildProxyedUrls(url, PROXIES);
   assert.strictEqual(urls.length, 3, '应该生成 3 个候选 URL');
-  assert.ok(urls[0].startsWith('https://ghfast.top/'), '第一个应该是 ghfast.top 代理');
-  assert.ok(urls[1].startsWith('https://mirror.ghproxy.com/'), '第二个应该是 ghproxy 代理');
-  assert.strictEqual(urls[2], url, '第三个应该是原始 URL');
-  console.log(`   ✓ 生成 ${urls.length} 个候选 URL`);
+  assert.strictEqual(urls[0], url, '第一个必须是官方原始 URL（防止第三方供应链投毒）');
+  assert.ok(urls[1].startsWith('https://ghfast.top/'), '第二个是首选备用代理');
+  assert.ok(urls[2].startsWith('https://mirror.ghproxy.com/'), '第三个是次选备用代理');
+  console.log(`   ✓ 生成 ${urls.length} 个候选 URL (官方源优先)`);
   urls.forEach((u, i) => console.log(`     [${i}] ${u}`));
 });
 

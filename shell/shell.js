@@ -393,7 +393,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       </div>
       <div class="setting-row">
         <span class="setting-label">软件版本</span>
-        <span style="font-size:12px;color:var(--accent-blue);font-weight:500;">v0.1.0 (旗舰桌面版)</span>
+        <span id="setting-version-label" style="font-size:12px;color:var(--accent-blue);font-weight:500;">检测中...</span>
       </div>
     `;
 
@@ -413,6 +413,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     container.querySelector('#btn-setting-context').addEventListener('click', async () => {
       await dsh.registerContextMenu();
       alert('已成功将 DeepSeek Harness 添加到 Windows 鼠标右键菜单！');
+    });
+  }
+
+  
+  // 11. 剪贴板投喂与后台审批通知双向通信桥 (连接 <webview> guest-preload)
+  if (dshCoreView) {
+    dshCoreView.addEventListener('ipc-message', (event) => {
+      if (event.channel === 'dsh:needs-approval') {
+        const payload = event.args && event.args[0];
+        if (dsh.nativeNotify) {
+          dsh.nativeNotify(payload);
+        }
+      }
+    });
+  }
+
+  if (dsh.onInjectClipboard) {
+    dsh.onInjectClipboard((text) => {
+      if (dshCoreView) {
+        try {
+          dshCoreView.send('dsh:inject-clipboard-text', text);
+        } catch (e) {
+          console.warn('[shell] Failed to send clipboard text to webview:', e);
+        }
+      }
     });
   }
 
