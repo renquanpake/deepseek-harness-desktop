@@ -2,13 +2,20 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { isBackendHttp, isTrustedSender } = require('../lib/trusted-url');
 
-test('isBackendHttp: validates legitimate 127.0.0.1 and localhost URLs', () => {
+test('isBackendHttp: validates legitimate 127.0.0.1 and localhost URLs with exact port', () => {
   assert.strictEqual(isBackendHttp('http://127.0.0.1:3080', 3080), true);
   assert.strictEqual(isBackendHttp('http://127.0.0.1:3080/chat', 3080), true);
   assert.strictEqual(isBackendHttp('http://localhost:3080', 3080), true);
   assert.strictEqual(isBackendHttp('http://localhost:3080/settings?tab=model', 3080), true);
+
+  // Default port 80 only matches port 80, never 3080
+  assert.strictEqual(isBackendHttp('http://127.0.0.1', 80), true);
+  assert.strictEqual(isBackendHttp('http://127.0.0.1/', 3080), false);
+  assert.strictEqual(isBackendHttp('http://localhost/', 3080), false);
 });
 
 test('isBackendHttp: rejects non-http protocols, remote domains, and port mismatches', () => {
@@ -35,16 +42,17 @@ test('isBackendHttp: rejects non-http protocols, remote domains, and port mismat
 test('isTrustedSender: allows desktop shell file:// and mainWindow sender, plus backend http', () => {
   const fakeWebContents = {};
   const fakeMainWindow = { webContents: fakeWebContents };
+  const legitimateShellUrl = pathToFileURL(path.resolve(__dirname, '..', 'shell', 'index.html')).href;
 
   // Shell sender matching mainWindow
   assert.strictEqual(
-    isTrustedSender({ sender: fakeWebContents, senderFrame: { url: 'file:///path/to/shell/index.html' } }, 3080, fakeMainWindow),
+    isTrustedSender({ sender: fakeWebContents, senderFrame: { url: legitimateShellUrl } }, 3080, fakeMainWindow),
     true
   );
 
-  // Shell sender matching file:// shell path
+  // Shell sender matching exact file:// shell path
   assert.strictEqual(
-    isTrustedSender({ sender: {}, senderFrame: { url: 'file:///C:/app/shell/index.html' } }, 3080),
+    isTrustedSender({ sender: {}, senderFrame: { url: legitimateShellUrl } }, 3080),
     true
   );
 
@@ -54,9 +62,9 @@ test('isTrustedSender: allows desktop shell file:// and mainWindow sender, plus 
     true
   );
 
-  // Rejects untrusted file
+  // Rejects fake subpath trying to spoof shell/index.html
   assert.strictEqual(
-    isTrustedSender({ sender: {}, senderFrame: { url: 'file:///C:/malicious/index.html' } }, 3080),
+    isTrustedSender({ sender: {}, senderFrame: { url: 'file:///C:/malicious/fake/shell/index.html' } }, 3080),
     false
   );
 

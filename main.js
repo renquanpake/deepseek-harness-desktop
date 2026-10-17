@@ -17,9 +17,6 @@ const fs = require('fs');
 const os = require('os');
 const http = require('http');
 const https = require('https');
-const net = require('net');
-const stream = require('stream');
-const { promisify } = require('util');
 const { toWslPath } = require('./lib/win-utils');
 const { getAutoStart, setAutoStart } = require('./lib/auto-start');
 const { findAvailablePort, prependPathDirs } = require('./lib/env-utils');
@@ -34,7 +31,6 @@ const {
   semverCompare,
   isNewer,
   decideUpdatePlan,
-  formatUpdateDescription,
   buildProxyedUrls,
   pickInstallerUrl,
   downloadWithProxies,
@@ -44,7 +40,6 @@ const {
   checkRemoteReleaseAssets: checkReleaseFromUrls
 } = require('./lib/updater');
 
-const streamPipeline = promisify(stream.pipeline);
 
 let mainWindow = null;
 let tray = null;
@@ -325,10 +320,10 @@ function assertTrustedSender(event) {
 
 // cleanStaleLocks is imported from ./lib/lock-cleaner
 
-function hydratePresetPluginsIfNeeded() {
+function hydratePresetPluginsIfNeeded(force = false) {
   const runtimeDir = getRuntimeDir();
   const presetProfile = path.join(runtimeDir, 'default-profile');
-  const res = hydratePresetPlugins(presetProfile, DSH_HOME);
+  const res = hydratePresetPlugins(presetProfile, DSH_HOME, { force });
   if (res.hydrated) {
     console.log('[preset] 已深度校准并补齐出厂增强插件配置');
   }
@@ -671,7 +666,8 @@ function startDshBackend(resetCrash = true) {
     const rawWslWorkspace = toWslPath(targetWorkspaceDir);
     const cleanWslWorkspace = rawWslWorkspace.replace(/^["']|["']$/g, '');
     const safeFlag = isSafeMode ? '--safe-mode' : '';
-    const wslCmd = `cd "${cleanWslWorkspace}" && npx --yes @deepseek-ai/dsh web --port ${currentPort} ${safeFlag}`;
+    const safeWslWorkspace = "'" + cleanWslWorkspace.replace(/'/g, "'\\''") + "'";
+    const wslCmd = `cd ${safeWslWorkspace} && npx --yes @deepseek-ai/dsh web --port ${currentPort} ${safeFlag}`;
     dshProcess = spawn('wsl.exe', ['--', 'bash', '-lc', wslCmd], {
       stdio: 'pipe',
       windowsHide: true,
@@ -1249,7 +1245,7 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
             console.warn(`[shell-update] 释放单实例锁失败: ${lockErr.message}`);
           }
           try {
-            const installer = spawn(installerPath, ['/S'], { detached: true, stdio: 'ignore' });
+            const installer = spawn(installerPath, [], { detached: true, stdio: 'ignore' });
             installer.unref();
           } catch (err) {
             dialog.showErrorBox('NSIS 安装启动失败', String(err.message || err));
@@ -1539,10 +1535,15 @@ function buildNativeAppMenu() {
         {
           label: '恢复出厂预置插件 (重置界面增强组件)',
           click: async () => {
-            const markerFile = path.join(DSH_HOME, '.codex-studio-hydrated');
-            if (fs.existsSync(markerFile)) fs.unlinkSync(markerFile);
-            hydratePresetPluginsIfNeeded();
+            hydratePresetPluginsIfNeeded(true);
             await restartWithCurrentConfig();
+            if (mainWindow) {
+              dialog.showMessageBox(mainWindow, {
+                type: 'info',
+                title: '预置插件重置',
+                message: '已成功强制恢复出厂预置插件配置并重启工作台！'
+              });
+            }
           }
         }
       ]
@@ -1949,7 +1950,7 @@ app.on('before-quit', () => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin' || !isWindowsPlatform()) {
+  if (process.platform !== 'darwin') {
     isQuitting = true;
     killProcessTree();
     app.quit();

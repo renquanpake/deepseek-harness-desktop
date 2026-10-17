@@ -95,3 +95,30 @@ test('hydratePresetPlugins: deeply merges when user web profile already exists',
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test('hydratePresetPlugins: force option overrides existing user profile', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-test-hydrate-force-'));
+  const presetDir = path.join(tmpDir, 'preset');
+  const dshHome = path.join(tmpDir, 'user-dsh');
+
+  const presetWeb = path.join(presetDir, 'profiles', 'web');
+  const userWeb = path.join(dshHome, 'profiles', 'web');
+  fs.mkdirSync(presetWeb, { recursive: true });
+  fs.mkdirSync(userWeb, { recursive: true });
+
+  fs.writeFileSync(path.join(presetWeb, 'package.json'), JSON.stringify({
+    dsh: { profile: { bundles: ['factory-preset-only'] } }
+  }));
+  fs.writeFileSync(path.join(userWeb, 'package.json'), JSON.stringify({
+    dsh: { profile: { bundles: ['old-corrupted-bundle'] } }
+  }));
+
+  const res = hydratePresetPlugins(presetDir, dshHome, { force: true });
+  assert.strictEqual(res.hydrated, true);
+  assert.strictEqual(res.mode, 'force-reset');
+
+  const finalPkg = JSON.parse(fs.readFileSync(path.join(userWeb, 'package.json'), 'utf8'));
+  assert.deepStrictEqual(finalPkg.dsh.profile.bundles, ['factory-preset-only']);
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
