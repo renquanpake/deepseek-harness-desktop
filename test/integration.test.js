@@ -23,7 +23,8 @@ const {
   httpGetJson,
   checkRemoteCoreVersion: checkCoreFromUrls,
   checkRemoteShellVersion: checkShellFromUrls,
-  checkRemoteReleaseAssets: checkReleaseFromUrls
+  checkRemoteReleaseAssets: checkReleaseFromUrls,
+  fetchSha256FromUrls
 } = require('../lib/updater');
 
 const CORE_URLS = ['https://registry.npmmirror.com/@deepseek-ai/dsh/latest'];
@@ -407,6 +408,25 @@ test('12. 完整更新流程模拟', async () => {
   } else {
     console.log('   ⚠ 部分版本检查失败，跳过完整流程验证');
   }
+});
+
+test('13. SHA256 侧车: mock 服务器获取、解析与 404 容错', async () => {
+  const expected = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
+  await createMockServer({
+    '/app.exe.sha256': (req, res) => {
+      res.statusCode = 200;
+      res.end(`${expected}  app.exe\n`);
+    }
+  });
+  const base = `http://127.0.0.1:${mockServerPort}`;
+
+  const sha = await fetchSha256FromUrls([`${base}/app.exe.sha256`]);
+  assert.strictEqual(sha, expected, '应从 mock 服务器解析出哈希');
+  console.log(`   ✓ 侧车哈希解析: ${sha}`);
+
+  const missing = await fetchSha256FromUrls([`${base}/not-found.sha256`]);
+  assert.strictEqual(missing, null, '404 时应返回 null 以便回退');
+  console.log('   ✓ 404 容错: 返回 null');
 });
 
 // ===== 清理 =====

@@ -1,12 +1,17 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const {
   semverCompare,
   isNewer,
   decideUpdatePlan,
   buildProxyedUrls,
   pickInstallerUrl,
-  pickFirstAvailable
+  pickFirstAvailable,
+  parseSha256Sidecar,
+  computeFileSha256
 } = require('../lib/updater');
 
 test('semverCompare: strict ordering', () => {
@@ -95,4 +100,29 @@ test('pickInstallerUrl: prefers non-portable .exe', () => {
 test('pickFirstAvailable: returns first non-null candidate', () => {
   assert.strictEqual(pickFirstAvailable([null, 'a', 'b']), 'a');
   assert.strictEqual(pickFirstAvailable([null, undefined, null]), null);
+});
+
+test('parseSha256Sidecar: extracts hash from sha256sum sidecar text', () => {
+  const h = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
+  assert.strictEqual(parseSha256Sidecar(`${h}  app.exe\n`), h);
+  assert.strictEqual(parseSha256Sidecar(h), h);
+  assert.strictEqual(parseSha256Sidecar(`SHA256(${h})`), h);
+  assert.strictEqual(parseSha256Sidecar(h.toUpperCase()), h);
+  assert.strictEqual(parseSha256Sidecar('not a hash'), null);
+  assert.strictEqual(parseSha256Sidecar(''), null);
+  assert.strictEqual(parseSha256Sidecar(null), null);
+});
+
+test('computeFileSha256: matches known vector and handles missing file', () => {
+  const tmpFile = path.join(os.tmpdir(), `dsh-sha-test-${process.pid}-${Date.now()}.txt`);
+  fs.writeFileSync(tmpFile, 'abc');
+  try {
+    assert.strictEqual(
+      computeFileSha256(tmpFile),
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+    );
+  } finally {
+    fs.unlinkSync(tmpFile);
+  }
+  assert.strictEqual(computeFileSha256(path.join(os.tmpdir(), 'dsh-sha-missing-file-xyz.txt')), null);
 });
