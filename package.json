@@ -1,16 +1,17 @@
 {
   "name": "deepseek-harness-desktop",
   "version": "0.1.0",
-  "description": "DeepSeek Harness 桌面端外壳 - 把 dsh WebUI 包成原生 Windows 应用",
+  "description": "DeepSeek Harness 桌面端外壳 - 原生 Windows 一体化装甲",
   "main": "main.js",
   "license": "MIT",
   "private": true,
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node scripts/clean-legacy.js && node --test test/*.test.js test/preset-hydrator.test.js test/self-repair.test.js",
+    "test": "node --test test/*.test.js test/preset-hydrator.test.js test/self-repair.test.js",
     "test:integration": "node --test test/integration.test.js",
     "runtime:prepare": "node prepare-runtime.js",
+    "clean:legacy": "node scripts/clean-legacy.js",
     "dist": "npm run runtime:prepare && electron-builder --win"
   },
   "dependencies": {},
@@ -27,7 +28,7 @@
     "files": [
       "main.js",
       "preload.js",
-      "shell/",
+      "splash.html",
       "lib/",
       "package.json",
       "build/",
@@ -49,7 +50,7 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "DeepSeek Harness Studio"
+      "shortcutName": "DeepSeek Harness"
     }
   }
 }

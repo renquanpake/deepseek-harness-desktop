@@ -47,19 +47,6 @@ function runCmd(cmd, cwd = RUNTIME_DIR, allowFail = false) {
   }
 }
 
-function copyBundledNode() {
-  console.log('[prepare-runtime] Bundling standalone console Node runtime to dsh-runtime/node.exe');
-  const source = process.execPath;
-  const target = path.join(RUNTIME_DIR, 'node.exe');
-  if (source === target) {
-    return;
-  }
-  try {
-    fs.copyFileSync(source, target);
-  } catch (err) {
-    console.warn(`[prepare-runtime] Warning: failed to bundle node.exe (${err.message}); falling back to ELECTRON_RUN_AS_NODE`);
-  }
-}
 
 function installBundledPnpm() {
   console.log('[prepare-runtime] Bundling pnpm into dsh-runtime/node_modules/pnpm');
@@ -104,9 +91,7 @@ function main() {
   };
   fs.writeFileSync(path.join(RUNTIME_DIR, 'package.json'), JSON.stringify(runtimePkg, null, 2));
 
-  copyBundledNode();
-
-  console.log(`=== [2/5] Bundling standalone node.exe and pnpm ===`);
+  console.log(`=== [2/5] Bundling standalone pnpm ===`);
   installBundledPnpm();
 
   console.log(`=== [3/5] Installing @deepseek-ai/dsh@${DSH_VERSION} via npmmirror ===`);
