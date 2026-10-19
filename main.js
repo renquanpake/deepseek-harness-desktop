@@ -75,6 +75,7 @@ let localRuntimeSpawnError = null;
 let watchdogTimer = null;
 let backendLoadFailures = 0;
 let isBackendReadyState = false;
+let authenticatedBackendUrl = null;
 let worktreeCloseDialogShowing = false;
 const activeWorktreeSession = { worktreePath: null, repoPath: null, branchName: null };
 
@@ -286,7 +287,7 @@ function buildBackendEnv() {
 function getBundledNodeExe() {
   const bundledNode = path.join(getBundledRuntimeDir(), 'node.exe');
   if (fs.existsSync(bundledNode)) return bundledNode;
-  return null;
+  return process.execPath;
 }
 
 function getBundledPnpmCjs() {
@@ -655,7 +656,7 @@ function startDshBackend(resetCrash = true) {
     crashCount = 0;
   }
   const runtimeDir = getRuntimeDir();
-  const args = ['web', '--port', String(currentPort)];
+  const args = ['web', '--no-open', '--port', String(currentPort)];
   if (isSafeMode) {
     args.push('--safe-mode');
   }
@@ -669,7 +670,7 @@ function startDshBackend(resetCrash = true) {
     const cleanWslWorkspace = rawWslWorkspace.replace(/^["']|["']$/g, '');
     const safeFlag = isSafeMode ? '--safe-mode' : '';
     const safeWslWorkspace = "'" + cleanWslWorkspace.replace(/'/g, "'\\''") + "'";
-    const wslCmd = `cd ${safeWslWorkspace} && npx --yes @deepseek-ai/dsh web --port ${currentPort} ${safeFlag}`;
+    const wslCmd = `cd ${safeWslWorkspace} && npx --yes @deepseek-ai/dsh web --no-open --port ${currentPort} ${safeFlag}`;
     dshProcess = spawn('wsl.exe', ['--', 'bash', '-lc', wslCmd], {
       stdio: 'pipe',
       windowsHide: true,
@@ -691,7 +692,7 @@ function startDshBackend(resetCrash = true) {
     const bundledNode = getBundledNodeExe();
     const commonSpawnOpts = {
       cwd: targetWorkspaceDir,
-      env,
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
       stdio: 'pipe',
       windowsHide: true,
       detached: !isWindows
@@ -720,6 +721,11 @@ function startDshBackend(resetCrash = true) {
     proc.stdout.on('data', (chunk) => {
       const line = String(chunk);
       console.log(`[dsh] ${line}`);
+      const match = line.match(/dsh web:\s*(https?:\/\/[^\s(]+)/i);
+      if (match && match[1]) {
+        authenticatedBackendUrl = match[1].trim();
+        console.log(`[dsh-auth] 成功捕获启动认证 URL: ${authenticatedBackendUrl}`);
+      }
       if (mainWindow && mainWindow.webContents) {
         mainWindow.webContents.send('dsh:runtime-log', line);
       }
@@ -830,13 +836,17 @@ function waitForBackendReady(timeoutMs = 30000) {
 
 async function restartWithCurrentConfig() {
   isBackendReadyState = false;
+  authenticatedBackendUrl = null;
   currentPort = await findAvailablePort(currentPort || 3080);
   startDshBackend();
   const ready = await waitForBackendReady();
   isBackendReadyState = Boolean(ready);
-  if (mainWindow && mainWindow.webContents) {
+  const targetUrl = authenticatedBackendUrl || `http://127.0.0.1:${currentPort}`;
+  if (mainWindow && !mainWindow.isDestroyed()) {
     if (ready) {
-      mainWindow.webContents.send('dsh:backend-ready', `http://127.0.0.1:${currentPort}`, currentPort);
+      mainWindow.loadURL(targetUrl);
+      mainWindow.setTitle(`DeepSeek Harness — ${targetWorkspaceDir}`);
+      mainWindow.webContents.send('dsh:backend-ready', targetUrl, currentPort);
     }
     buildNativeAppMenu();
     updateTrayMenu();
@@ -1683,11 +1693,11 @@ function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      webviewTag: true
+      webviewTag: false
     }
   });
   buildNativeAppMenu();
-  mainWindow.loadFile(path.join(__dirname, 'shell', 'index.html'));
+  mainWindow.loadFile(path.join(__dirname, 'splash.html'));
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isBackendHttp(url, currentPort)) {
       return { action: 'allow' };
@@ -1707,9 +1717,17 @@ function createMainWindow() {
     }
   });
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (isBackendHttp(url, currentPort)) return;
+    if (isBackendHttp(url, currentPort) || url.startsWith('file://')) return;
     event.preventDefault();
     shell.openExternal(url);
+  });
+  mainWindow.webContents.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL) => {
+    if (validatedURL === 'about:blank' || (validatedURL && validatedURL.endsWith('splash.html'))) return;
+    backendLoadFailures += 1;
+    console.warn(`[dsh-watchdog] 后端页面加载失败 code=${errorCode} ${errorDescription}（连续 ${backendLoadFailures} 次）`);
+  });
+  mainWindow.webContents.on('dom-ready', () => {
+    backendLoadFailures = 0;
   });
   mainWindow.on('close', (event) => {
     if (isQuitting || !isWindowsPlatform()) return;
@@ -1819,7 +1837,7 @@ ipcMain.handle('dsh:get-backend-status', (event) => {
   assertTrustedSender(event);
   return {
     ready: Boolean(isBackendReadyState && dshProcess),
-    url: `http://127.0.0.1:${currentPort}`,
+    url: authenticatedBackendUrl || `http://127.0.0.1:${currentPort}`,
     port: currentPort,
     engine: currentEngine,
     workspaceDir: targetWorkspaceDir
