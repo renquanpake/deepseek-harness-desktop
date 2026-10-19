@@ -49,7 +49,6 @@ let isQuitting = false;
 let currentPort = 3080;
 let currentEngine = 'win-native';
 let isSafeMode = false;
-const useChinaMirror = true;
 let targetWorkspaceDir = process.cwd();
 let targetWorkspaceIsWorktree = false;
 
@@ -237,7 +236,9 @@ function getRuntimeDir() {
 function getRuntimeBinDirs() {
   const dirs = [];
   const nodeExe = getBundledNodeExe();
-  if (nodeExe) dirs.push(path.dirname(nodeExe));
+  if (nodeExe && path.basename(nodeExe).toLowerCase() === 'node.exe') {
+    dirs.push(path.dirname(nodeExe));
+  }
   const pnpmCjs = getBundledPnpmCjs();
   if (pnpmCjs) dirs.push(path.dirname(pnpmCjs));
   return dirs;
@@ -717,14 +718,19 @@ function startDshBackend(resetCrash = true) {
   const proc = dshProcess;
   armLocalRuntimeWatchdog(proc);
 
+  let stdoutAccumulator = '';
   if (proc.stdout) {
     proc.stdout.on('data', (chunk) => {
       const line = String(chunk);
       console.log(`[dsh] ${line}`);
-      const match = line.match(/dsh web:\s*(https?:\/\/[^\s(]+)/i);
+      stdoutAccumulator += line;
+      const match = stdoutAccumulator.match(/dsh web:\s*(https?:\/\/[^\s()]+)(?:[\r\n]|\s+\()/i);
       if (match && match[1]) {
         authenticatedBackendUrl = match[1].trim();
         console.log(`[dsh-auth] 成功捕获启动认证 URL: ${authenticatedBackendUrl}`);
+      }
+      if (stdoutAccumulator.length > 20000) {
+        stdoutAccumulator = stdoutAccumulator.slice(-5000);
       }
       if (mainWindow && mainWindow.webContents) {
         mainWindow.webContents.send('dsh:runtime-log', line);
@@ -841,6 +847,12 @@ async function restartWithCurrentConfig() {
   startDshBackend();
   const ready = await waitForBackendReady();
   isBackendReadyState = Boolean(ready);
+  if (ready && !authenticatedBackendUrl) {
+    const deadline = Date.now() + 1500;
+    while (!authenticatedBackendUrl && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
   const targetUrl = authenticatedBackendUrl || `http://127.0.0.1:${currentPort}`;
   if (mainWindow && !mainWindow.isDestroyed()) {
     if (ready) {
@@ -1027,6 +1039,7 @@ function runPnpmAdd(nodeExe, pnpmCjs, packages) {
       cwd: LOCAL_RUNTIME_DIR,
       env: {
         ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
         NPM_CONFIG_REGISTRY: currentRegistryUrl(),
         NPM_CONFIG_PACKAGE_IMPORT_METHOD: 'copy',
         NPM_CONFIG_NODE_LINKER: 'hoisted',
@@ -1522,6 +1535,28 @@ function buildNativeAppMenu() {
         },
         { type: 'separator' },
         {
+          label: '🩺 环境自动体检与自愈 (清理死锁与重置连接)...',
+          click: async () => {
+            const report = runSelfRepair({
+              dshHome: DSH_HOME,
+              runtimeDir: getRuntimeDir(),
+              killOrphanProcess: () => killProcessTree()
+            });
+            const ready = await restartWithCurrentConfig();
+            if (mainWindow) {
+              const actionList = report.actions && report.actions.length
+                ? report.actions.map((a) => `• ${a}`).join('\n')
+                : '• 系统环境检测正常，未发现死锁或异常标记。';
+              dialog.showMessageBox(mainWindow, {
+                type: 'info',
+                title: '环境体检与自愈报告',
+                message: ready ? '自愈完成，服务已就绪！' : '自愈执行完毕，正在等待服务重连...',
+                detail: `${actionList}\n\n当前端口: ${currentPort}\n引擎模式: ${currentEngine}`
+              });
+            }
+          }
+        },
+        {
           label: '🔄 检查更新 (自动联检内核与外壳)',
           click: () => {
             runUpdateCheck(false);
@@ -1704,17 +1739,6 @@ function createMainWindow() {
     }
     shell.openExternal(url);
     return { action: 'deny' };
-  });
-  mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
-    webPreferences.preload = path.join(__dirname, 'shell', 'guest-preload.js');
-    webPreferences.nodeIntegration = false;
-    webPreferences.contextIsolation = true;
-    webPreferences.sandbox = true;
-    const src = params && params.src ? String(params.src) : '';
-    if (src && src !== 'about:blank' && !isBackendHttp(src, currentPort)) {
-      console.warn(`[security] 拦截非法的 webview 挂载地址: ${src}`);
-      event.preventDefault();
-    }
   });
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (isBackendHttp(url, currentPort) || url.startsWith('file://')) return;
@@ -1972,32 +1996,6 @@ ipcMain.handle('dsh:check-update', (event) => {
   assertTrustedSender(event);
   runUpdateCheck(false);
   return { ok: true };
-});
-
-app.on('web-contents-created', (_event, contents) => {
-  if (contents.getType() !== 'webview') return;
-  contents.setWindowOpenHandler(({ url }) => {
-    if (isBackendHttp(url, currentPort)) {
-      return { action: 'allow' };
-    }
-    shell.openExternal(url);
-    return { action: 'deny' };
-  });
-  contents.on('will-navigate', (event, url) => {
-    if (url === 'about:blank' || isBackendHttp(url, currentPort)) return;
-    event.preventDefault();
-    shell.openExternal(url);
-  });
-  contents.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL) => {
-    if (validatedURL === 'about:blank') return;
-    backendLoadFailures += 1;
-    console.warn(
-      `[dsh-watchdog] 内嵌工作台加载失败 code=${errorCode} ${errorDescription}（连续 ${backendLoadFailures} 次）`
-    );
-  });
-  contents.on('dom-ready', () => {
-    backendLoadFailures = 0;
-  });
 });
 
 app.whenReady().then(async () => {
