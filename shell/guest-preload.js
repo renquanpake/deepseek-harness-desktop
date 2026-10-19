@@ -9,7 +9,10 @@ let observerScheduled = false;
 // 1. 扫描 DSH Web 内部真实 DOM 的审批提示
 function checkApprovalPrompts() {
   observerScheduled = false;
-  if (!document.hidden) return; // 窗口在前台时无需打扰
+  // 仅当用户当前正聚焦在工作台内时跳过；若窗口切到后台或最小化则触发提醒
+  if (typeof document.hasFocus === 'function' && document.hasFocus() && !document.hidden) {
+    return;
+  }
   const now = Date.now();
   if (now - lastNotifyTime < 8000) return;
 
@@ -32,7 +35,6 @@ function checkApprovalPrompts() {
 
   if (needsApproval) {
     lastNotifyTime = now;
-    // 通过 sendToHost 将真实审批事件上报给父级宿主外壳
     ipcRenderer.sendToHost('dsh:needs-approval', {
       title: 'DeepSeek Harness 等待指令审批',
       body: 'AI 智能体正在请求执行工具或 Shell 命令，点击立即返回窗口处理。'
@@ -53,12 +55,29 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+window.addEventListener('blur', () => {
+  setTimeout(checkApprovalPrompts, 200);
+});
+
 window.addEventListener('DOMContentLoaded', () => {
   if (document.body) {
     approvalObserver.observe(document.body, { childList: true, subtree: true });
   }
 
-  // 2. 监听来自宿主外壳的剪贴板投喂消息并精准灌入真实输入框
+  // 2. 监听截图粘贴：当用户在对话框粘贴图片（无纯文本）时，请求宿主落盘并注入路径
+  window.addEventListener('paste', (event) => {
+    const target = event.target;
+    const isEditable =
+      target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.isContentEditable);
+    if (!isEditable) return;
+    const text = event.clipboardData ? event.clipboardData.getData('text') : '';
+    const hasItems = event.clipboardData && event.clipboardData.items && event.clipboardData.items.length > 0;
+    if ((!text || !text.trim()) && hasItems) {
+      ipcRenderer.sendToHost('dsh:request-clipboard-paste');
+    }
+  });
+
+  // 3. 监听来自宿主外壳的剪贴板投喂消息并精准灌入真实输入框
   ipcRenderer.on('dsh:inject-clipboard-text', (_event, text) => {
     if (!text) return;
     const activeEl = document.activeElement;

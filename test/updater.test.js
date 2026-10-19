@@ -1,12 +1,18 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
 const {
   semverCompare,
   isNewer,
   decideUpdatePlan,
   buildProxyedUrls,
   pickInstallerUrl,
-  pickFirstAvailable
+  pickFirstAvailable,
+  extractInstallerSha256,
+  verifyInstallerIntegrity
 } = require('../lib/updater');
 
 test('semverCompare: strict ordering', () => {
@@ -95,4 +101,44 @@ test('pickInstallerUrl: prefers non-portable .exe', () => {
 test('pickFirstAvailable: returns first non-null candidate', () => {
   assert.strictEqual(pickFirstAvailable([null, 'a', 'b']), 'a');
   assert.strictEqual(pickFirstAvailable([null, undefined, null]), null);
+});
+
+test('extractInstallerSha256: extracts digest from GitHub asset or release body', () => {
+  const fakeHash = 'a'.repeat(64);
+  const rel1 = {
+    assets: [
+      {
+        name: 'setup.exe',
+        browser_download_url: 'https://x/setup.exe',
+        digest: `sha256:${fakeHash.toUpperCase()}`
+      }
+    ]
+  };
+  assert.strictEqual(extractInstallerSha256(rel1, 'https://x/setup.exe'), fakeHash);
+
+  const rel2 = {
+    assets: [{ name: 'setup.exe', browser_download_url: 'https://x/setup.exe' }],
+    body: `Release notes\n${fakeHash}  setup.exe\n`
+  };
+  assert.strictEqual(extractInstallerSha256(rel2, 'https://x/setup.exe'), fakeHash);
+});
+
+test('verifyInstallerIntegrity: validates matching hash and deletes tampered file on mismatch', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-updater-sha-'));
+  const filePath = path.join(tmpDir, 'installer.exe');
+  const payload = Buffer.from('trusted-installer-binary-payload', 'utf8');
+  fs.writeFileSync(filePath, payload);
+  const expectedHash = crypto.createHash('sha256').update(payload).digest('hex');
+
+  const okRes = verifyInstallerIntegrity(filePath, expectedHash);
+  assert.strictEqual(okRes.ok, true);
+  assert.strictEqual(okRes.verified, true);
+  assert.strictEqual(fs.existsSync(filePath), true);
+
+  const badRes = verifyInstallerIntegrity(filePath, 'b'.repeat(64));
+  assert.strictEqual(badRes.ok, false);
+  assert.strictEqual(badRes.reason, 'hash-mismatch');
+  assert.strictEqual(fs.existsSync(filePath), false, 'Tampered installer must be unlinked immediately');
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });

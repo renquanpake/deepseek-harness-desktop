@@ -84,13 +84,12 @@
         </div>
       </div>
 
-      <!-- 内嵌核心 Web 视图 -->
+      <!-- 内嵌核心 Web 视图 (由主进程 will-attach-webview 强制安全注入 guest-preload.js) -->
       <webview
         id="dsh-core-view"
         src="about:blank"
         allowpopups="true"
         partition="persist:dsh-core"
-        preload="./guest-preload.js"
         class="core-view-hidden"
       ></webview>
     </main>
@@ -108,7 +107,7 @@
     </div>
 
     <div class="status-right">
-      <span class="status-item" id="status-core-version">DeepSeek Harness v0.1.0</span>
+      <span class="status-item" id="status-core-version">DeepSeek Harness</span>
       <span class="status-separator">|</span>
       <span class="status-item clickable" id="status-update-check" title="点击检查更新">检查更新</span>
     </div>
@@ -149,6 +148,11 @@
         </div>
 
         <div class="repair-result-banner" id="repair-result-banner" style="display:none;"></div>
+
+        <details id="repair-log-details" style="margin-top:12px;">
+          <summary style="font-size:11px; color:var(--text-dim); cursor:pointer;">查看实时服务状态流</summary>
+          <pre id="repair-live-log" style="margin-top:6px; padding:8px; max-height:100px; overflow-y:auto; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; font-size:10px; color:var(--text-muted); white-space:pre-wrap; word-break:break-all;">等待服务状态输出...</pre>
+        </details>
       </div>
       <div class="modal-footer">
         <button class="btn-modal secondary" id="btn-cancel-repair">关闭</button>

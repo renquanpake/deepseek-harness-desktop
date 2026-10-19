@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node --test test/*.test.js test/preset-hydrator.test.js test/self-repair.test.js",
+    "test": "node scripts/clean-legacy.js && node --test test/*.test.js test/preset-hydrator.test.js test/self-repair.test.js",
     "test:integration": "node --test test/integration.test.js",
     "runtime:prepare": "node prepare-runtime.js",
     "dist": "npm run runtime:prepare && electron-builder --win"
