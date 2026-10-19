@@ -1,7 +1,9 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "0.1.0",
+  "productName": "DeepSeek Harness",
+  "version": "0.2.0",
   "description": "DeepSeek Harness 桌面端外壳 - 原生 Windows 一体化装甲",
+  "author": "renquanpake",
   "main": "main.js",
   "license": "MIT",
   "private": true,
@@ -21,6 +23,8 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
+    "appId": "com.renquanpake.deepseek-harness-desktop",
+    "productName": "DeepSeek Harness",
     "asar": true,
     "asarUnpack": [
       "dsh-runtime/**"
@@ -34,7 +38,12 @@
       "build/",
       "dsh-runtime/"
     ],
+    "directories": {
+      "output": "dist"
+    },
+    "publish": null,
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",

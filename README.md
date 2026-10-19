@@ -14,12 +14,12 @@
 
 ### 方式二：本地一键生成 Windows 安装包
 1. 在项目根目录双击 **`一键打包及安装.bat`**。
-2. 脚本全自动配置环境并在 `dist/` 目录下生成 `DeepSeek-Harness-Desktop Setup 0.1.0.exe` 安装包。
+  2. 脚本全自动配置环境并在 `dist/` 目录下生成 `DeepSeek Harness Setup 0.2.0.exe` 安装包。
 3. 双击生成的 `.exe` 即可像普通 Windows 软件一样安装使用。
 
 ### 方式三：GitHub Actions 云端全自动打包
 * 本项目已配置自动化 CI/CD 流程（`.github/workflows/build.yml`）。
-* 代码推送到 GitHub 仓库并打上版本标签（如 `v0.1.0`）后，GitHub Actions 将自动完成云端构建并发布正式的 Release 安装包供公开下载。
+* 代码推送到 GitHub 仓库并打上版本标签（如 `v0.2.0`）后，GitHub Actions 将自动完成云端构建并发布正式的 Release 安装包供公开下载。
 
 ---
 

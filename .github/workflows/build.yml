@@ -33,12 +33,15 @@ jobs:
         run: npm test
 
       - name: Build Windows installer
-        run: npx electron-builder --win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --publish never
 
       - name: Generate SHA256SUMS
         shell: pwsh
         run: |
-          $files = Get-ChildItem -Path dist -Include *.exe,*.zip -File
+          $files = Get-ChildItem -Path dist -Recurse -Include *.exe,*.zip -File |
+            Where-Object { $_.Name -notlike '*.blockmap' }
           $lines = foreach ($f in $files) {
             $hash = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash.ToLower()
             "$hash  $($f.Name)"
