@@ -42,17 +42,17 @@ test('isBackendHttp: rejects non-http protocols, remote domains, and port mismat
 test('isTrustedSender: allows desktop shell file:// and mainWindow sender, plus backend http', () => {
   const fakeWebContents = {};
   const fakeMainWindow = { webContents: fakeWebContents };
-  const legitimateShellUrl = pathToFileURL(path.resolve(__dirname, '..', 'shell', 'index.html')).href;
+  const legitimateSplashUrl = pathToFileURL(path.resolve(__dirname, '..', 'splash.html')).href;
 
   // Shell sender matching mainWindow
   assert.strictEqual(
-    isTrustedSender({ sender: fakeWebContents, senderFrame: { url: legitimateShellUrl } }, 3080, fakeMainWindow),
+    isTrustedSender({ sender: fakeWebContents, senderFrame: { url: legitimateSplashUrl } }, 3080, fakeMainWindow),
     true
   );
 
-  // Shell sender matching exact file:// shell path
+  // Shell sender matching exact file:// splash path
   assert.strictEqual(
-    isTrustedSender({ sender: {}, senderFrame: { url: legitimateShellUrl } }, 3080),
+    isTrustedSender({ sender: {}, senderFrame: { url: legitimateSplashUrl } }, 3080),
     true
   );
 
@@ -62,9 +62,9 @@ test('isTrustedSender: allows desktop shell file:// and mainWindow sender, plus 
     true
   );
 
-  // Rejects fake subpath trying to spoof shell/index.html
+  // Rejects fake subpath trying to spoof splash.html
   assert.strictEqual(
-    isTrustedSender({ sender: {}, senderFrame: { url: 'file:///C:/malicious/fake/shell/index.html' } }, 3080),
+    isTrustedSender({ sender: {}, senderFrame: { url: 'file:///C:/malicious/fake/splash.html' } }, 3080),
     false
   );
 

@@ -7,6 +7,7 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 
 const LEGACY_PATHS = [
+  'shell',
   'electron',
   'docs/superpowers',
   'CHANGES.patch',

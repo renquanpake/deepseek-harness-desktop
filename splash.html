@@ -2,98 +2,224 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DeepSeek Harness</title>
   <style>
     :root {
-      --bg-primary: #121214;
-      --bg-secondary: #18181b;
-      --bg-tertiary: #27272a;
+      --bg-primary: #090a0f;
+      --bg-card: #13151f;
+      --border-color: rgba(255, 255, 255, 0.08);
+      --accent-blue: #4d6bfe;
+      --accent-glow: rgba(77, 107, 254, 0.35);
       --text-main: #f4f4f5;
       --text-muted: #a1a1aa;
-      --accent-blue: #3b82f6;
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      --text-dim: #71717a;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body {
-      height: 100%;
-      width: 100%;
-      background: var(--bg-primary);
-      color: var(--text-main);
-      font-family: var(--font-sans);
-      overflow: hidden;
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
       user-select: none;
     }
     body {
+      background: radial-gradient(circle at 50% 30%, #171926 0%, var(--bg-primary) 70%);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      height: 100vh;
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
+      overflow: hidden;
+      -webkit-app-region: drag;
     }
-    .splash-card {
-      width: 320px;
+    .splash-container {
       display: flex;
       flex-direction: column;
       align-items: center;
       text-align: center;
+      padding: 40px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 30px var(--accent-glow);
+      max-width: 420px;
+      width: 90%;
+      backdrop-filter: blur(20px);
+      transition: all 0.3s ease;
     }
-    .splash-mark {
-      width: 56px;
-      height: 56px;
-      margin-bottom: 16px;
-      border-radius: 14px;
-      background: linear-gradient(145deg, #2563eb, #60a5fa);
+    .logo-wrapper {
+      position: relative;
+      width: 68px;
+      height: 68px;
+      margin-bottom: 24px;
       display: flex;
       align-items: center;
       justify-content: center;
-      animation: pulse 1.5s ease infinite alternate;
     }
-    .splash-mark span {
-      font-size: 22px;
-      font-weight: 700;
-      letter-spacing: 0.5px;
+    .logo-pulse {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: var(--accent-blue);
+      opacity: 0.2;
+      animation: pulse 2s infinite ease-out;
+    }
+    .logo-icon {
+      font-size: 34px;
+      z-index: 1;
+      filter: drop-shadow(0 0 12px var(--accent-blue));
+    }
+    h1 {
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+      color: #ffffff;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 28px;
+      line-height: 1.5;
+    }
+    .progress-track {
+      width: 100%;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      overflow: hidden;
+      position: relative;
+      margin-bottom: 16px;
+    }
+    .progress-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 100%;
+      width: 40%;
+      background: linear-gradient(90deg, transparent, var(--accent-blue), #818cf8);
+      border-radius: 999px;
+      animation: indeterminate 1.8s infinite ease-in-out;
+    }
+    .status-text {
+      font-size: 12px;
+      color: var(--text-dim);
+      min-height: 18px;
+      transition: color 0.2s ease;
+    }
+    .repair-hint {
+      margin-top: 20px;
+      display: none;
+      animation: fadeIn 0.4s ease forwards;
+      -webkit-app-region: no-drag;
+    }
+    .btn-repair {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: var(--text-muted);
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-repair:hover {
+      background: var(--accent-blue);
+      border-color: var(--accent-blue);
+      color: #ffffff;
+      box-shadow: 0 0 15px var(--accent-glow);
+    }
+    .btn-repair:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
     @keyframes pulse {
-      from { transform: scale(0.95); opacity: 0.85; }
-      to { transform: scale(1.05); opacity: 1; }
+      0% { transform: scale(0.9); opacity: 0.5; }
+      50% { transform: scale(1.3); opacity: 0.1; }
+      100% { transform: scale(1.6); opacity: 0; }
     }
-    .splash-title {
-      font-size: 16px;
-      font-weight: 600;
-      margin-bottom: 6px;
+    @keyframes indeterminate {
+      0% { left: -40%; width: 30%; }
+      50% { left: 40%; width: 50%; }
+      100% { left: 100%; width: 30%; }
     }
-    .splash-desc {
-      font-size: 12px;
-      color: var(--text-muted);
-      margin-bottom: 20px;
-    }
-    .splash-progress-track {
-      width: 100%;
-      height: 3px;
-      background: var(--bg-tertiary);
-      border-radius: 2px;
-      overflow: hidden;
-    }
-    .splash-progress-bar {
-      width: 40%;
-      height: 100%;
-      background: var(--accent-blue);
-      animation: loading 1.5s ease-in-out infinite;
-    }
-    @keyframes loading {
-      0% { transform: translateX(-100%); }
-      100% { transform: translateX(250%); }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
     }
   </style>
 </head>
 <body>
-  <div class="splash-card">
-    <div class="splash-mark"><span>DH</span></div>
-    <h1 class="splash-title">DeepSeek Harness</h1>
-    <p class="splash-desc" id="splash-status-text">正在启动本地 AI 工作台...</p>
-    <div class="splash-progress-track">
-      <div class="splash-progress-bar"></div>
+  <div class="splash-container">
+    <div class="logo-wrapper">
+      <div class="logo-pulse"></div>
+      <div class="logo-icon">⚡</div>
+    </div>
+    <h1>DeepSeek Harness</h1>
+    <div class="subtitle" id="sub-title">原生桌面客户端 · 正在启动</div>
+    <div class="progress-track">
+      <div class="progress-bar"></div>
+    </div>
+    <div class="status-text" id="status-label">正在初始化本地运行时...</div>
+
+    <div class="repair-hint" id="repair-hint">
+      <button class="btn-repair" id="btn-self-repair">
+        <span>🩺</span>
+        <span>启动偏慢？点击自动检修与重启</span>
+      </button>
     </div>
   </div>
+
+  <script>
+    const statusLabel = document.getElementById('status-label');
+    const repairHint = document.getElementById('repair-hint');
+    const btnSelfRepair = document.getElementById('btn-self-repair');
+
+    const tips = [
+      '正在检测可用端口与隔离环境...',
+      '正在连接官方 DSH 内核服务...',
+      '正在同步出厂界面增强与扩展插件...',
+      '正在校验安全会话 Token...'
+    ];
+    let tipIdx = 0;
+    const tipInterval = setInterval(() => {
+      tipIdx = (tipIdx + 1) % tips.length;
+      if (statusLabel) statusLabel.textContent = tips[tipIdx];
+    }, 2200);
+
+    setTimeout(() => {
+      if (repairHint) {
+        repairHint.style.display = 'block';
+        if (statusLabel) statusLabel.textContent = '后端握手耗时偏长，可点击下方检修：';
+      }
+    }, 8000);
+
+    if (btnSelfRepair) {
+      btnSelfRepair.addEventListener('click', async () => {
+        btnSelfRepair.disabled = true;
+        btnSelfRepair.innerHTML = '<span>⏳</span><span>正在排查死锁与修复环境...</span>';
+        if (window.dshDesktop && typeof window.dshDesktop.runSelfRepair === 'function') {
+          try {
+            await window.dshDesktop.runSelfRepair();
+            btnSelfRepair.innerHTML = '<span>✓</span><span>环境已自愈，正在重启连接...</span>';
+          } catch (e) {
+            btnSelfRepair.innerHTML = '<span>⚠️</span><span>自愈已触发，正在重连...</span>';
+          }
+        }
+      });
+    }
+
+    if (window.dshDesktop && typeof window.dshDesktop.onBackendReady === 'function') {
+      window.dshDesktop.onBackendReady(() => {
+        clearInterval(tipInterval);
+        if (statusLabel) statusLabel.textContent = '服务就绪，即将进入工作台...';
+      });
+    }
+  </script>
 </body>
 </html>
