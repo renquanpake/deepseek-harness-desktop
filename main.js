@@ -34,7 +34,7 @@ const {
   buildProxyedUrls,
   pickInstallerUrl,
   downloadWithProxies,
-  httpGetJson,
+  verifyInstallerIntegrity,
   checkRemoteCoreVersion: checkCoreFromUrls,
   checkRemoteShellVersion: checkShellFromUrls,
   checkRemoteReleaseAssets: checkReleaseFromUrls
@@ -74,6 +74,7 @@ let watchedRuntimeExitCode = null;
 let localRuntimeSpawnError = null;
 let watchdogTimer = null;
 let backendLoadFailures = 0;
+let isBackendReadyState = false;
 let worktreeCloseDialogShowing = false;
 const activeWorktreeSession = { worktreePath: null, repoPath: null, branchName: null };
 
@@ -519,6 +520,7 @@ async function handleWorktreeWindowClose() {
 }
 
 function killProcessTree() {
+  isBackendReadyState = false;
   if (!dshProcess || !dshProcess.pid) return;
   const proc = dshProcess;
   proc.killedByUs = true;
@@ -827,9 +829,11 @@ function waitForBackendReady(timeoutMs = 30000) {
 // findAvailablePort imported from ./lib/env-utils
 
 async function restartWithCurrentConfig() {
+  isBackendReadyState = false;
   currentPort = await findAvailablePort(currentPort || 3080);
   startDshBackend();
   const ready = await waitForBackendReady();
+  isBackendReadyState = Boolean(ready);
   if (mainWindow && mainWindow.webContents) {
     if (ready) {
       mainWindow.webContents.send('dsh:backend-ready', `http://127.0.0.1:${currentPort}`, currentPort);
@@ -1224,6 +1228,16 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
           setWindowProgress(`正在下载客户端外壳更新 (${percent}%)...`);
         }, { proxies: UPDATER.GITHUB_DOWNLOAD_PROXIES, timeoutMs: UPDATER.DOWNLOAD_TIMEOUT_MS });
 
+        const integrity = verifyInstallerIntegrity(installerPath, release.sha256);
+        if (!integrity.ok) {
+          clearWindowProgress();
+          dialog.showErrorBox(
+            '安装包安全校验未通过',
+            `外壳更新包 SHA-256 校验失败（原因: ${integrity.reason}），文件已被安全拦截并清理。`
+          );
+          return;
+        }
+
         if (isPortable()) {
           const folder = path.dirname(installerPath);
           shell.showItemInFolder(installerPath);
@@ -1235,7 +1249,23 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
             detail: `解压或覆盖 ${folder} 中的旧安装文件即可。用户数据保存在 portable-data 中，不会丢失。`
           });
         } else {
-          setWindowProgress('正在启动 NSIS 静默覆盖安装...');
+          const verifyDesc = integrity.verified
+            ? `✓ 官方 SHA-256 哈希校验已通过 (${integrity.actual.slice(0, 16)}...)`
+            : `本地 SHA-256 指纹: ${integrity.actual ? integrity.actual.slice(0, 16) + '...' : '未知'}`;
+          const confirmInstall = await dialog.showMessageBox(mainWindow, {
+            type: 'question',
+            title: '安装客户端更新',
+            message: `桌面外壳更新包 (v${remoteShell}) 已就绪，是否立即启动安装程序？`,
+            detail: `${verifyDesc}\n启动安装程序后当前窗口将自动关闭。`,
+            buttons: ['立即安装', '稍后手动安装'],
+            defaultId: 0,
+            cancelId: 1
+          });
+          if (confirmInstall.response !== 0) {
+            clearWindowProgress();
+            return;
+          }
+          setWindowProgress('正在启动安装程序...');
           killProcessTree();
           try {
             if (typeof app.releaseSingleInstanceLock === 'function') {
@@ -1325,7 +1355,6 @@ async function runUpdateCheck(silent = false) {
 function getTrayIconPath() {
   const candidates = [
     path.join(__dirname, 'build', 'icon.png'),
-    path.join(__dirname, 'electron', 'assets', 'icon.png'),
     path.join(process.resourcesPath, 'icon.png'),
     path.join(process.resourcesPath, 'build', 'icon.png')
   ];
@@ -1666,19 +1695,21 @@ function createMainWindow() {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+  mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    webPreferences.preload = path.join(__dirname, 'shell', 'guest-preload.js');
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    const src = params && params.src ? String(params.src) : '';
+    if (src && src !== 'about:blank' && !isBackendHttp(src, currentPort)) {
+      console.warn(`[security] 拦截非法的 webview 挂载地址: ${src}`);
+      event.preventDefault();
+    }
+  });
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (isBackendHttp(url, currentPort)) return;
     event.preventDefault();
     shell.openExternal(url);
-  });
-  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-    backendLoadFailures += 1;
-    console.warn(
-      `[dsh-watchdog] 后端页面加载失败 code=${errorCode} ${errorDescription}（连续 ${backendLoadFailures} 次）`
-    );
-  });
-  mainWindow.webContents.on('dom-ready', () => {
-    backendLoadFailures = 0;
   });
   mainWindow.on('close', (event) => {
     if (isQuitting || !isWindowsPlatform()) return;
@@ -1774,6 +1805,8 @@ ipcMain.on('dsh:native-notify', (event, payload) => {
 ipcMain.handle('dsh:get-runtime-info', (event) => {
   assertTrustedSender(event);
   return {
+    version: getShellVersion(),
+    coreVersion: getCurrentDshVersion().version,
     port: currentPort,
     engine: currentEngine,
     safeMode: isSafeMode,
@@ -1785,7 +1818,7 @@ ipcMain.handle('dsh:get-runtime-info', (event) => {
 ipcMain.handle('dsh:get-backend-status', (event) => {
   assertTrustedSender(event);
   return {
-    ready: isBackendHttp(`http://127.0.0.1:${currentPort}`, currentPort),
+    ready: Boolean(isBackendReadyState && dshProcess),
     url: `http://127.0.0.1:${currentPort}`,
     port: currentPort,
     engine: currentEngine,
@@ -1921,6 +1954,32 @@ ipcMain.handle('dsh:check-update', (event) => {
   assertTrustedSender(event);
   runUpdateCheck(false);
   return { ok: true };
+});
+
+app.on('web-contents-created', (_event, contents) => {
+  if (contents.getType() !== 'webview') return;
+  contents.setWindowOpenHandler(({ url }) => {
+    if (isBackendHttp(url, currentPort)) {
+      return { action: 'allow' };
+    }
+    shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  contents.on('will-navigate', (event, url) => {
+    if (url === 'about:blank' || isBackendHttp(url, currentPort)) return;
+    event.preventDefault();
+    shell.openExternal(url);
+  });
+  contents.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL) => {
+    if (validatedURL === 'about:blank') return;
+    backendLoadFailures += 1;
+    console.warn(
+      `[dsh-watchdog] 内嵌工作台加载失败 code=${errorCode} ${errorDescription}（连续 ${backendLoadFailures} 次）`
+    );
+  });
+  contents.on('dom-ready', () => {
+    backendLoadFailures = 0;
+  });
 });
 
 app.whenReady().then(async () => {

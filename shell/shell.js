@@ -42,15 +42,34 @@ document.addEventListener('DOMContentLoaded', async () => {
   const stepPlugin = document.getElementById('step-plugin');
   const stepBackend = document.getElementById('step-backend');
   const repairResultBanner = document.getElementById('repair-result-banner');
+  const repairLiveLog = document.getElementById('repair-live-log');
 
   let activeDrawerTab = null;
   let isAlwaysOnTop = false;
   let isBackendMounted = false;
   let isAutoRepairing = false;
   let startupTimeoutTimer = null;
-  let lastCoreUrl = 'about:blank';
+  let cachedAppVersion = null;
+  const runtimeLogBuffer = [];
 
-  // 2. 启动超时守护机制 (8秒超时自动介入检修与自愈)
+  // 2. 订阅实时运行日志流（限制最多 40 行，零内存膨胀）
+  if (dsh.onRuntimeLog) {
+    dsh.onRuntimeLog((line) => {
+      if (!line) return;
+      const clean = String(line).trimEnd();
+      if (!clean) return;
+      runtimeLogBuffer.push(clean);
+      if (runtimeLogBuffer.length > 40) {
+        runtimeLogBuffer.shift();
+      }
+      if (repairLiveLog) {
+        repairLiveLog.textContent = runtimeLogBuffer.join('\n');
+        repairLiveLog.scrollTop = repairLiveLog.scrollHeight;
+      }
+    });
+  }
+
+  // 3. 启动超时守护机制 (8秒超时自动介入检修与自愈)
   function startStartupGuardian() {
     startupTimeoutTimer = setTimeout(async () => {
       if (isBackendMounted || isAutoRepairing) return;
@@ -64,11 +83,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   startStartupGuardian();
 
-  // 3. 核心视图装载与 Splash 过渡
+  // 4. 核心视图装载与 Splash 过渡
   function hideSplashAndMountCore(url) {
     if (isBackendMounted && dshCoreView && dshCoreView.src === url) return;
     isBackendMounted = true;
-    lastCoreUrl = url;
 
     if (startupTimeoutTimer) {
       clearTimeout(startupTimeoutTimer);
@@ -106,7 +124,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   } catch {}
 
-  // 4. 自动检修与自愈执行引擎
+  // 5. 自动检修与自愈执行引擎
   async function runSelfRepairWorkflow(isFromSplash = false) {
     if (isAutoRepairing) return;
     isAutoRepairing = true;
@@ -127,7 +145,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (icon) icon.textContent = iconChar;
     }
 
-    // 重置步骤状态
     setStepState(stepLock, 'running', '⚙️');
     setStepState(stepMarker, '', '⏳');
     setStepState(stepPlugin, '', '⏳');
@@ -143,7 +160,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       setStepState(stepMarker, 'done', '✓');
       setStepState(stepPlugin, 'running', '⚙️');
 
-      // 调用主进程综合自愈 API
       const report = await dsh.runSelfRepair();
 
       setStepState(stepPlugin, 'done', '✓');
@@ -203,18 +219,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // 5. 启动屏手动修复按钮
+  // 6. 启动屏手动修复按钮
   if (btnSplashManualRepair) {
     btnSplashManualRepair.addEventListener('click', () => {
       runSelfRepairWorkflow(true);
     });
   }
 
-  // 6. 检修弹窗展示与交互
+  // 7. 检修弹窗展示与交互
   function openRepairModal() {
     if (!repairModal) return;
     repairModal.classList.remove('modal-hidden');
-    // 重置步骤状态显示
     [stepLock, stepMarker, stepPlugin, stepBackend].forEach((s) => {
       if (s) {
         s.className = 'repair-step';
@@ -238,7 +253,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // 底部状态栏检修入口
   if (statusRepairBtn) {
     statusRepairBtn.addEventListener('click', openRepairModal);
   }
@@ -246,7 +260,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusBackendIndicator.addEventListener('click', openRepairModal);
   }
 
-  // 7. 开机自启控制
+  // 8. 动态版本号获取与开机自启控制
+  try {
+    const info = await dsh.getRuntimeInfo();
+    cachedAppVersion = info && info.version ? 'v' + info.version : null;
+    const statusVer = document.getElementById('status-core-version');
+    if (statusVer) {
+      statusVer.textContent = cachedAppVersion ? 'DeepSeek Harness ' + cachedAppVersion : 'DeepSeek Harness';
+    }
+  } catch {}
+
   try {
     const isAuto = await dsh.getAutoStart();
     updateAutostartUI(isAuto);
@@ -273,7 +296,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateAutostartUI(newState);
   });
 
-  // 8. 窗口置顶
+  // 9. 窗口置顶
   btnPinWindow.addEventListener('click', async () => {
     isAlwaysOnTop = !isAlwaysOnTop;
     btnPinWindow.classList.toggle('active', isAlwaysOnTop);
@@ -282,7 +305,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // 9. 抽屉控制
+  // 10. 抽屉控制
   function openDrawer(tabName, title, renderFn) {
     activeDrawerTab = tabName;
     drawerTitle.textContent = title;
@@ -325,17 +348,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // 抽屉：插件市场（傻瓜化列表）
+  // 抽屉：插件市场（结合实际插件清单动态校验）
   const FRIENDLY_PLUGINS = [
-    { name: '工作台增强界面 (dsh-codex-ui)', desc: '提供舒适的深色编码工作区与多任务视图' },
-    { name: '官方扩展商店 (dshmarket)', desc: '在应用内自由安装社区官方海量技能与插件' },
-    { name: '侧边栏优化 (dsh-better-sidebar)', desc: '优雅折叠与快捷切换最近会话' },
-    { name: '路径链接解析 (dsh-pathlink)', desc: '自动识别对话中的代码与文件路径并支持点击打开' },
-    { name: '剪贴板极速插入 (dsh-paste-input)', desc: '支持快捷键将截图和长文本直接灌入输入框' },
-    { name: '会话存档与回滚 (dsh-checkpoint-rewind)', desc: '一键返回历史检查点，防止长对话失控' }
+    { id: 'dsh-codex-ui', name: '工作台增强界面 (dsh-codex-ui)', desc: '提供舒适的深色编码工作区与多任务视图' },
+    { id: 'dshmarket', name: '官方扩展商店 (dshmarket)', desc: '在应用内自由安装社区官方海量技能与插件' },
+    { id: 'dsh-better-sidebar', name: '侧边栏优化 (dsh-better-sidebar)', desc: '优雅折叠与快捷切换最近会话' },
+    { id: 'dsh-pathlink', name: '路径链接解析 (dsh-pathlink)', desc: '自动识别对话中的代码与文件路径并支持点击打开' },
+    { id: 'dsh-paste-input', name: '剪贴板极速插入 (dsh-paste-input)', desc: '支持快捷键将截图和长文本直接灌入输入框' },
+    { id: 'dsh-checkpoint-rewind', name: '会话存档与回滚 (dsh-checkpoint-rewind)', desc: '一键返回历史检查点，防止长对话失控' }
   ];
 
-  function renderPluginsDrawer(container) {
+  async function renderPluginsDrawer(container) {
     container.innerHTML = `
       <p style="color:var(--text-dim);font-size:12px;margin-bottom:12px;">已预置并激活的官方增强插件：</p>
       <div id="plugin-list-area"></div>
@@ -346,8 +369,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       </div>
     `;
 
+    let installedSet = new Set();
+    try {
+      const inv = await dsh.getPluginInventory();
+      if (inv && Array.isArray(inv.plugins)) {
+        installedSet = new Set(inv.plugins);
+      }
+    } catch {}
+
     const listArea = container.querySelector('#plugin-list-area');
+    if (!listArea) return;
     FRIENDLY_PLUGINS.forEach((p) => {
+      const isInstalled = installedSet.size === 0 || installedSet.has(p.id);
       const el = document.createElement('div');
       el.className = 'plugin-item';
       el.innerHTML = `
@@ -355,22 +388,35 @@ document.addEventListener('DOMContentLoaded', async () => {
           <span class="p-title">${p.name}</span>
           <span class="p-desc">${p.desc}</span>
         </div>
-        <span class="p-badge">已启用</span>
+        <span class="p-badge">${isInstalled ? '已启用' : '待校准'}</span>
       `;
       listArea.appendChild(el);
     });
 
-    container.querySelector('#btn-rehydrate-plugins').addEventListener('click', async () => {
-      const btn = container.querySelector('#btn-rehydrate-plugins');
-      btn.textContent = '正在刷新...';
-      await dsh.rehydratePlugins();
-      btn.textContent = '✓ 已就绪';
-      setTimeout(() => { btn.textContent = '🔄 一键修复与更新预置插件'; }, 1500);
-    });
+    const btnRehydrate = container.querySelector('#btn-rehydrate-plugins');
+    if (btnRehydrate) {
+      btnRehydrate.addEventListener('click', async () => {
+        btnRehydrate.textContent = '正在刷新...';
+        await dsh.rehydratePlugins();
+        btnRehydrate.textContent = '✓ 已就绪';
+        setTimeout(() => { btnRehydrate.textContent = '🔄 一键修复与更新预置插件'; }, 1500);
+      });
+    }
   }
 
-  // 抽屉：通用设置（傻瓜化开关 + 自动检修体检）
-  function renderSettingsDrawer(container) {
+  // 抽屉：通用设置（完整覆盖体检、沙箱、引擎、安全模式与系统集成）
+  async function renderSettingsDrawer(container) {
+    let wsStatus = { isWorktree: false, worktreeBranch: null, engine: 'win-native' };
+    try {
+      wsStatus = (await dsh.getWorkspaceStatus()) || wsStatus;
+    } catch {}
+
+    const engineLabel = wsStatus.engine === 'wsl2' ? 'WSL2 子系统' : 'Windows 原生';
+    const worktreeSub = wsStatus.isWorktree && wsStatus.worktreeBranch
+      ? `当前隔离分支: ${wsStatus.worktreeBranch}`
+      : '新建独立分支窗口，多任务并行互不干扰';
+    const verDisplay = cachedAppVersion ? `${cachedAppVersion} (旗舰桌面版)` : '旗舰桌面版';
+
     container.innerHTML = `
       <div class="setting-row">
         <div>
@@ -378,6 +424,27 @@ document.addEventListener('DOMContentLoaded', async () => {
           <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">排查死锁、端口占用与配置阻塞</div>
         </div>
         <button class="setting-btn accent" id="btn-setting-repair">一键检修</button>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">多任务独立沙箱</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:2px;" id="label-worktree-desc">${worktreeSub}</div>
+        </div>
+        <button class="setting-btn" id="btn-setting-worktree">新建沙箱</button>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">运行环境引擎</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:2px;" id="label-engine-desc">当前: ${engineLabel}</div>
+        </div>
+        <button class="setting-btn" id="btn-setting-engine">切换引擎</button>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">纯净安全模式</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">禁用第三方扩展重启以排查故障</div>
+        </div>
+        <button class="setting-btn" id="btn-setting-safemode">纯净重启</button>
       </div>
       <div class="setting-row">
         <span class="setting-label">开机自动启动</span>
@@ -389,17 +456,49 @@ document.addEventListener('DOMContentLoaded', async () => {
       </div>
       <div class="setting-row">
         <span class="setting-label">Windows 文件夹右键菜单</span>
-        <button class="setting-btn" id="btn-setting-context">一键添加</button>
+        <div style="display:flex;gap:6px;">
+          <button class="setting-btn" id="btn-setting-context">添加</button>
+          <button class="setting-btn" id="btn-setting-uncontext">移除</button>
+        </div>
       </div>
       <div class="setting-row">
         <span class="setting-label">软件版本</span>
-        <span id="setting-version-label" style="font-size:12px;color:var(--accent-blue);font-weight:500;">检测中...</span>
+        <span id="setting-version-label" style="font-size:12px;color:var(--accent-blue);font-weight:500;">${verDisplay}</span>
       </div>
     `;
 
     container.querySelector('#btn-setting-repair').addEventListener('click', () => {
       closeDrawer();
       openRepairModal();
+    });
+
+    container.querySelector('#btn-setting-worktree').addEventListener('click', async () => {
+      closeDrawer();
+      await dsh.createWorktreeDialog();
+    });
+
+    container.querySelector('#btn-setting-engine').addEventListener('click', async () => {
+      const nextEngine = wsStatus.engine === 'wsl2' ? 'win-native' : 'wsl2';
+      const btn = container.querySelector('#btn-setting-engine');
+      btn.textContent = '切换中...';
+      try {
+        const res = await dsh.switchEngine(nextEngine);
+        wsStatus.engine = (res && res.engine) || nextEngine;
+        const desc = container.querySelector('#label-engine-desc');
+        if (desc) desc.textContent = '当前: ' + (wsStatus.engine === 'wsl2' ? 'WSL2 子系统' : 'Windows 原生');
+        btn.textContent = '✓ 已切换';
+      } catch (e) {
+        btn.textContent = '切换失败';
+      }
+      setTimeout(() => { btn.textContent = '切换引擎'; }, 1500);
+    });
+
+    container.querySelector('#btn-setting-safemode').addEventListener('click', async () => {
+      const btn = container.querySelector('#btn-setting-safemode');
+      btn.textContent = '重启中...';
+      await dsh.restartSafeMode();
+      btn.textContent = '✓ 已重启';
+      setTimeout(() => { btn.textContent = '纯净重启'; }, 1500);
     });
 
     container.querySelector('#btn-setting-autostart').addEventListener('click', () => {
@@ -414,9 +513,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       await dsh.registerContextMenu();
       alert('已成功将 DeepSeek Harness 添加到 Windows 鼠标右键菜单！');
     });
+
+    container.querySelector('#btn-setting-uncontext').addEventListener('click', async () => {
+      await dsh.unregisterContextMenu();
+      alert('已从 Windows 鼠标右键菜单中移除 DeepSeek Harness。');
+    });
   }
 
-  
   // 11. 剪贴板投喂与后台审批通知双向通信桥 (连接 <webview> guest-preload)
   if (dshCoreView) {
     dshCoreView.addEventListener('ipc-message', (event) => {
@@ -424,6 +527,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const payload = event.args && event.args[0];
         if (dsh.nativeNotify) {
           dsh.nativeNotify(payload);
+        }
+      } else if (event.channel === 'dsh:request-clipboard-paste') {
+        if (dsh.requestClipboardPaste) {
+          dsh.requestClipboardPaste();
         }
       }
     });
@@ -441,7 +548,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // 10. 检查更新
+  // 12. 检查更新
   if (statusUpdateCheck) {
     statusUpdateCheck.addEventListener('click', () => {
       dsh.checkUpdate();
