@@ -9,7 +9,9 @@ const {
   Notification,
   shell,
   dialog,
-  clipboard
+  clipboard,
+  protocol,
+  net
 } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -31,6 +33,14 @@ const { runGit, runReg, runTaskkill, runTasklist, readWindowsProcessCommandLine 
 const { isBackendReadyStatus } = require('./lib/readiness');
 const { createSingleFlight } = require('./lib/restart-guard');
 const { assertValid: assertIpcPayload } = require('./lib/ipc-schema');
+const {
+  APP_SCHEME,
+  APP_HOST,
+  isAppUrl,
+  buildCsp,
+  registerAppSchemePrivileges,
+  createAppProtocolHandler
+} = require('./lib/app-protocol');
 const { createI18n } = require('./lib/i18n');
 const {
   semverCompare,
@@ -344,6 +354,44 @@ function assertTrustedSender(event) {
     const frameUrl = event.senderFrame ? event.senderFrame.url : '';
     throw new Error(`Untrusted IPC sender: ${frameUrl}`);
   }
+}
+
+const ENABLE_APP_PROTOCOL = /^(1|true|yes)$/i.test(String(process.env.DSH_ENABLE_APP_PROTOCOL || ''));
+
+// registerSchemesAsPrivileged 必须在 app.whenReady 之前完成
+registerAppSchemePrivileges(protocol);
+
+function backendProtocolOrigin() {
+  const targetUrl = authenticatedBackendUrl || `http://127.0.0.1:${currentPort}`;
+  try {
+    return new URL(targetUrl).origin;
+  } catch {
+    return null;
+  }
+}
+
+function installAppProtocolHandler() {
+  if (!ENABLE_APP_PROTOCOL) return;
+  const origin = backendProtocolOrigin();
+  const csp = buildCsp({ backendOrigin: origin, dev: process.env.DSH_DEV === '1' });
+  const handler = createAppProtocolHandler({
+    protocol,
+    net,
+    appRoot: __dirname,
+    backendOrigin: origin,
+    registerPrivileges: false
+  });
+  protocol.handle(APP_SCHEME, async (request) => {
+    const response = await handler(request);
+    const headers = new Headers(response.headers);
+    headers.set('content-security-policy', csp);
+    const hasBody = request.method !== 'HEAD' && response.body !== null;
+    return new Response(hasBody ? response.body : null, {
+      status: response.status,
+      statusText: response.statusText || '',
+      headers
+    });
+  });
 }
 
 // cleanStaleLocks is imported from ./lib/lock-cleaner
@@ -883,6 +931,7 @@ async function performRestartWithCurrentConfig() {
   }
   const ready = await waitForBackendReady();
   isBackendReadyState = Boolean(ready);
+  if (ready) installAppProtocolHandler();
   if (ready && !authenticatedBackendUrl) {
     const deadline = Date.now() + 1500;
     while (!authenticatedBackendUrl && Date.now() < deadline) {
@@ -1808,7 +1857,12 @@ function createMainWindow() {
     }
   });
   buildNativeAppMenu();
-  mainWindow.loadFile(path.join(__dirname, 'splash.html'));
+  installAppProtocolHandler();
+  if (ENABLE_APP_PROTOCOL) {
+    mainWindow.loadURL(`${APP_SCHEME}://${APP_HOST}/splash.html`);
+  } else {
+    mainWindow.loadFile(path.join(__dirname, 'splash.html'));
+  }
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isBackendHttp(url, currentPort)) {
       return { action: 'allow' };
@@ -1817,7 +1871,7 @@ function createMainWindow() {
     return { action: 'deny' };
   });
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (isBackendHttp(url, currentPort) || url.startsWith('file://')) return;
+    if (isBackendHttp(url, currentPort) || isAppUrl(url) || url.startsWith('file://')) return;
     event.preventDefault();
     shell.openExternal(url);
   });

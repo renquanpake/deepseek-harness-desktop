@@ -74,3 +74,27 @@ test('isTrustedSender: allows desktop shell file:// and mainWindow sender, plus 
     false
   );
 });
+
+test('isTrustedSender: allows dsh-app://app origin and rejects spoofed variants', () => {
+  assert.strictEqual(
+    isTrustedSender({ sender: {}, senderFrame: { url: 'dsh-app://app/splash.html' } }, 3080),
+    true
+  );
+  assert.strictEqual(
+    isTrustedSender({ sender: {}, senderFrame: { url: 'dsh-app://app/api/status' } }, 3080),
+    true
+  );
+  // 错误 host / 带端口 / 错误 scheme 均不可信
+  assert.strictEqual(
+    isTrustedSender({ sender: {}, senderFrame: { url: 'dsh-app://evil/splash.html' } }, 3080),
+    false
+  );
+  assert.strictEqual(
+    isTrustedSender({ sender: {}, senderFrame: { url: 'dsh-app://app:3080/splash.html' } }, 3080),
+    false
+  );
+  assert.strictEqual(
+    isTrustedSender({ sender: {}, senderFrame: { url: 'http://app/splash.html' } }, 3080),
+    false
+  );
+});

@@ -1,15 +1,16 @@
 # 架构说明
 
-本文描述 DeepSeek Harness Desktop 外壳的**当前架构**与**目标架构**。目标架构中的 `dsh-app://` 接入尚未落到 `main.js`；本仓库当前只新增了协议模块 `lib/app-protocol.js` 与其单测 `test/app-protocol.test.js`，主进程仍按原有方式直接加载后端 HTTP 地址。
+本文描述 DeepSeek Harness Desktop 外壳的**当前架构**与**目标架构**。`dsh-app://` 协议模块已接入 `main.js`：协议权限在模块加载期注册，`/api` 代理与 CSP 注入由 `installAppProtocolHandler` 完成，但受环境变量 `DSH_ENABLE_APP_PROTOCOL`（默认关闭）门控。默认运行时渲染层仍直接加载后端 HTTP 地址，因为内核前端静态资源目前仍由 DSH 后端服务提供，待构建产物本地化后再切换 `loadURL('dsh-app://app/')`。
 
 ## 1. 基线与范围
 
 - 运行时：Electron 37、Node.js 22、CommonJS、`node:test`。
 - 主进程入口：`main.js`。
 - 渲染层桥接：`preload.js`。
-- 可信 URL 判定：`lib/trusted-url.js`。
-- 本次新增：`lib/app-protocol.js`、`test/app-protocol.test.js`、本文档。
-- 本次不修改：`main.js`、`preload.js`、`package.json`。
+- 可信 URL 判定：`lib/trusted-url.js`（接受主窗口、精确 `splash.html`、后端端口、`dsh-app://app` 来源）。
+- 本次新增：`lib/app-protocol.js`、`lib/ipc-schema.js`、`lib/i18n.js`、`lib/python-runtime.js`、`lib/secure-exec.js`、`lib/readiness.js`、`lib/restart-guard.js`、`lib/update-manifest.js`、`lib/update-source-policy.js` 及其单测与本文档。
+- 本次修改：`main.js`（IPC 契约校验、i18n、协议接线、更新源策略）、`lib/updater.js`、`prepare-runtime.js`、`package.json`。
+- 本次未修改：`preload.js`（窄桥接收敛列为后续目标）。
 
 ## 2. 当前架构
 
@@ -18,10 +19,11 @@
 当前 `main.js` 是单体组合根，窗口创建、后端生命周期、IPC、菜单、托盘、更新、剪贴板等逻辑集中在同一文件。`createMainWindow` 位于 `main.js`，其关键行为如下：
 
 - `BrowserWindow` 使用 `preload.js`，并开启 `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`、`webviewTag: false`。
-- 先 `loadFile('splash.html')` 显示启动页。
-- 后端就绪后，通过 `mainWindow.loadURL(authenticatedBackendUrl || http://127.0.0.1:${currentPort})` 直接加载后端页面。
-- `setWindowOpenHandler` 与 `will-navigate` 只放行当前后端端口与 `file://`，其余交给系统浏览器。
-- IPC 发送方校验使用 `lib/trusted-url.js` 的 `isTrustedSender`，允许主窗口、精确匹配的 `splash.html`、以及精确端口的 `127.0.0.1`/`localhost` 后端页面。
+- 启动页默认 `loadFile('splash.html')`；设置 `DSH_ENABLE_APP_PROTOCOL=true` 时改用 `dsh-app://app/splash.html`。
+- 后端就绪后，通过 `mainWindow.loadURL(authenticatedBackendUrl || http://127.0.0.1:${currentPort})` 直接加载后端页面（整体切到 `dsh-app://app/` 待前端静态产物本地化）。
+- `setWindowOpenHandler` 只放行当前后端端口，`will-navigate` 放行后端端口、`dsh-app://app` 与 `file://`，其余交给系统浏览器。
+- IPC 发送方校验使用 `lib/trusted-url.js` 的 `isTrustedSender`，允许主窗口、精确匹配的 `splash.html`、精确端口的 `127.0.0.1`/`localhost` 后端页面、以及 `dsh-app://app` 来源。
+- 全部 19 个入站 IPC handler 经 `lib/ipc-schema.js` 的 `assertValid` 做集中参数契约校验。
 
 当前请求流：
 
@@ -48,15 +50,15 @@ graph TD
 
 ### 2.3 当前边界与问题
 
-- 渲染层页面来源是后端 HTTP 地址，外壳没有为本地静态资源建立独立来源。
+- 渲染层页面来源默认仍是后端 HTTP 地址；`dsh-app://` 本地来源已具备能力但受 `DSH_ENABLE_APP_PROTOCOL` 门控。
 - 后端页面与桌面桥接处于同一窗口，页面来源即后端来源。
-- 外壳未统一注入 CSP；`connect-src`、`script-src`、`frame-ancestors` 等策略取决于后端自身。
-- 本地资源路径校验依赖 `file://` 启动页的精确路径判断，缺少通用的静态资源根目录约束。
-- 所有 IPC 处理函数逐处调用 `assertTrustedSender`，缺少集中式参数契约校验。
+- `dsh-app` 响应已统一注入 CSP；后端 HTTP 页面的 CSP 仍取决于后端自身。
+- 本地资源路径校验：`dsh-app` 使用通用静态根目录约束与路径穿越防护；`file://` 启动页仍用精确路径判断。
+- 全部 19 个入站 IPC handler 已接入 `lib/ipc-schema.js` 集中参数契约校验。
 
 ## 3. 目标架构
 
-> 状态：目标设计。除 `lib/app-protocol.js` 与其单测外，以下内容尚未接入主进程。
+> 状态：核心协议层已接入 `main.js`（`DSH_ENABLE_APP_PROTOCOL` 门控，默认关闭）。渲染层整体切到 `dsh-app://app/`、`preload.js` 窄桥接收敛仍属目标设计，待前端静态产物本地化后执行。
 
 ### 3.1 总体结构
 
@@ -130,8 +132,8 @@ sequenceDiagram
 - preload 只暴露与桌面外壳强相关的少量方法：应用/后端状态读取、引擎切换、自启动、置顶、更新检查、剪贴板注入、后端就绪与日志事件。
 - 领域能力（工作区、插件、Worktree 等）按需分组，避免把全部内部能力平铺到 `window`。
 - IPC 通道统一使用 `dsh:` 前缀，分为 `invoke` 请求与单向 `send` 事件。
-- 主进程侧以 `lib/ipc-schema.js`（规划模块，本任务未包含）集中声明通道、参数结构、返回结构与发送方约束。
-- 发送方校验继续以 `lib/trusted-url.js` 为基础，并在目标架构中增加 `dsh-app://app` 来源。
+- 主进程侧以 `lib/ipc-schema.js` 集中声明通道、参数结构、返回结构与发送方约束（19 个入站 handler 已接入 `assertValid`）。
+- 发送方校验继续以 `lib/trusted-url.js` 为基础，现已接受 `dsh-app://app` 来源。
 
 ### 3.4 安全边界
 
@@ -148,19 +150,18 @@ sequenceDiagram
 
 ## 4. 接入 main.js 所需步骤
 
-以下步骤尚未执行，仅作为后续集成清单：
-
-1. 在 `app.whenReady` 之前调用 `registerAppSchemePrivileges(protocol)`，确保 `dsh-app` 获得标准、安全、可 fetch、支持 CORS 的协议权限。
-2. 确认构建产物目录并作为 `appRoot`，同时把该目录加入 `package.json` 的打包文件清单；当前 `build.files` 只包含 `main.js`、`preload.js`、`splash.html`、`lib/`、`build/`、`dsh-runtime/`。
-3. 在 `app.whenReady` 之后调用 `createAppProtocolHandler({ protocol, net, appRoot, backendOrigin, registerPrivileges: false })`，`backendOrigin` 使用当前后端地址。
-4. 把 `loadURL(http://127.0.0.1:<port>)` 替换为 `loadURL('dsh-app://app/')`，并同步调整 `setWindowOpenHandler`、`will-navigate` 的来源判定。
-5. 在 `session.defaultSession.webRequest.onHeadersReceived` 中为 `dsh-app` 响应注入 `buildCsp({ backendOrigin, dev })`。
-6. 扩展 `lib/trusted-url.js`，让 `isTrustedSender` 接受 `dsh-app://app` 来源，并补充对应单测。
-7. 把 `preload.js` 收敛到窄桥接，并接入 `lib/ipc-schema.js` 的集中校验。
-8. 增加端到端验证：静态资源加载、`/api` 代理、路径穿越拒绝、CSP 生效、后端重启后代理地址更新。
+1. ✅ 在 `app.whenReady` 之前调用 `registerAppSchemePrivileges(protocol)`，确保 `dsh-app` 获得标准、安全、可 fetch、支持 CORS 的协议权限。（已实现：模块加载期顶层调用）
+2. ⏳ 确认构建产物目录并作为 `appRoot`，同时把该目录加入 `package.json` 的打包文件清单；当前 `build.files` 只包含 `main.js`、`preload.js`、`splash.html`、`lib/`、`build/`、`dsh-runtime/`。（现以模块目录为 `appRoot`，静态服务能力已可用；`index.html` 待内核前端产物本地化后纳入）
+3. ✅ 在 `app.whenReady` 之后调用 `createAppProtocolHandler({ protocol, net, appRoot, backendOrigin, registerPrivileges: false })`，`backendOrigin` 使用当前后端地址。（已实现：`installAppProtocolHandler`；`DSH_ENABLE_APP_PROTOCOL=true` 时启用）
+4. ✅ 后端地址同步：`setWindowOpenHandler` 维持后端 HTTP 白名单，`will-navigate` 已增加 `isAppUrl` 判定；启动 splash 在开关开启时改用 `dsh-app://app/splash.html`；后端每次就绪后重装 handler 以刷新 `backendOrigin`。渲染主界面 `loadURL('dsh-app://app/')` 切换待步骤 2 完成。
+5. ✅ CSP：`dsh-app` 响应经封装 handler 注入 `buildCsp({ backendOrigin, dev })` 头（等价于 `onHeadersReceived`，实现更贴近协议层）。
+6. ✅ 扩展 `lib/trusted-url.js`，让 `isTrustedSender` 接受 `dsh-app://app` 来源，并补充对应单测。
+7. ⏳ 把 `preload.js` 收敛到窄桥接，并接入 `lib/ipc-schema.js` 的集中校验。（IPC schema 校验已在主进程 19 个 handler 全量落地；preload 收敛待进行）
+8. ⏳ 增加端到端验证：静态资源加载、`/api` 代理、路径穿越拒绝、CSP 生效、后端重启后代理地址更新。（协议层单测与集成静态断言已覆盖路径穿越与 CSP 构造；端到端需 GUI 环境）
 
 ## 5. 当前验证状态
 
 - `node --test test/app-protocol.test.js`：19 个用例通过。
-- `npm test`：142 个用例全部通过。
-- 协议模块尚未接入 `main.js`，因此当前运行时仍使用原有 HTTP 加载方式。
+- `node --test test/app-protocol-integration.test.js`：主进程接线静态断言通过。
+- `npm test`：156 个用例全部通过。
+- 协议模块已通过 `DSH_ENABLE_APP_PROTOCOL` 接入主进程；默认关闭时运行时仍按原有 HTTP 直接加载方式，行为与 0.2.1 基线一致。
