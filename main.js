@@ -28,8 +28,8 @@ const { runSelfRepair } = require('./lib/self-repair');
 const { isBackendHttp, isTrustedSender } = require('./lib/trusted-url');
 const { decideRestart, MAX_CRASH_RESTARTS } = require('./lib/backend-lifecycle');
 const { pickWorkspaceMode } = require('./lib/cli-workspace');
-const { runRegCommands } = require('./lib/win-reg');
-const { runGit, runReg, runTaskkill, runTasklist, readWindowsProcessCommandLine } = require('./lib/secure-exec');
+const { registerWindowsContextMenu, unregisterWindowsContextMenu } = require('./lib/context-menu');
+const { runGit, runTaskkill, runTasklist, readWindowsProcessCommandLine } = require('./lib/secure-exec');
 const { isBackendReadyStatus } = require('./lib/readiness');
 const { createSingleFlight } = require('./lib/restart-guard');
 const { assertValid: assertIpcPayload } = require('./lib/ipc-schema');
@@ -41,7 +41,9 @@ const {
   registerAppSchemePrivileges,
   createAppProtocolHandler
 } = require('./lib/app-protocol');
+const UPDATE_CHECK = require('./lib/update-check');
 const { createI18n } = require('./lib/i18n');
+const { createClipboardBridge } = require('./src/clipboard');
 const {
   semverCompare,
   isNewer,
@@ -49,11 +51,7 @@ const {
   buildProxyedUrls,
   pickInstallerUrl,
   downloadWithProxies,
-  verifyInstallerIntegrity,
-  checkRemoteCoreVersion: checkCoreFromUrls,
-  checkRemoteShellVersion: checkShellFromUrls,
-  checkRemoteReleaseAssets: checkReleaseFromUrls,
-  resolveUpdateSources
+  verifyInstallerIntegrity
 } = require('./lib/updater');
 
 
@@ -94,6 +92,7 @@ let isBackendReadyState = false;
 let authenticatedBackendUrl = null;
 let worktreeCloseDialogShowing = false;
 const activeWorktreeSession = { worktreePath: null, repoPath: null, branchName: null };
+let updateCheckInFlight = false;
 
 // app.getLocale() only has a reliable value after ready, so build the i18n singleton lazily on first use.
 function getI18n() {
@@ -280,7 +279,7 @@ function getRuntimeBinDirs() {
 // prependPathDirs imported from ./lib/env-utils
 
 function currentRegistryUrl() {
-  return UPDATER.REGISTRY + '/';
+  return UPDATE_CHECK.CONFIG.REGISTRY + '/';
 }
 
 function buildBackendEnv() {
@@ -953,113 +952,7 @@ async function performRestartWithCurrentConfig() {
 
 const restartWithCurrentConfig = createSingleFlight(performRestartWithCurrentConfig);
 
-const CONTEXT_MENU_COMMAND_KEY_BG = 'HKCU\\Software\\Classes\\Directory\\Background\\shell';
-const CONTEXT_MENU_COMMAND_KEY_DIR = 'HKCU\\Software\\Classes\\Directory\\shell';
 
-function contextMenuRegisterCommands(exePath) {
-  return [
-    ['add', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen`, '/ve', '/d', 'Open with DeepSeek Harness Studio', '/f'],
-    ['add', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen`, '/v', 'Icon', '/d', `"${exePath}"`, '/f'],
-    ['add', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen\\command`, '/ve', '/d', `"${exePath}" --open-dir "%V%"`, '/f'],
-    ['add', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen`, '/ve', '/d', 'Open with DeepSeek Harness Studio', '/f'],
-    ['add', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen`, '/v', 'Icon', '/d', `"${exePath}"`, '/f'],
-    ['add', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen\\command`, '/ve', '/d', `"${exePath}" --open-dir "%1"`, '/f'],
-    ['add', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree`, '/ve', '/d', 'Open in New Git Worktree (DSH Studio)', '/f'],
-    ['add', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree`, '/v', 'Icon', '/d', `"${exePath}"`, '/f'],
-    ['add', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree\\command`, '/ve', '/d', `"${exePath}" --worktree-dir "%V%"`, '/f'],
-    ['add', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree`, '/ve', '/d', 'Open in New Git Worktree (DSH Studio)', '/f'],
-    ['add', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree`, '/v', 'Icon', '/d', `"${exePath}"`, '/f'],
-    ['add', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree\\command`, '/ve', '/d', `"${exePath}" --worktree-dir "%1"`, '/f']
-  ];
-}
-
-function contextMenuUnregisterCommands() {
-  return [
-    ['delete', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen`, '/f'],
-    ['delete', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen`, '/f'],
-    ['delete', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree`, '/f'],
-    ['delete', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree`, '/f']
-  ];
-}
-
-const regSync = (args) => runReg(args);
-const warnReg = (cmd, err) => console.warn(`[reg-menu] Skipped key: ${cmd}\nReason: ${err.message}`);
-
-function registerWindowsContextMenu() {
-  if (process.platform !== 'win32') {
-    return { ok: 0, failed: 0, total: 0 };
-  }
-  return runRegCommands(contextMenuRegisterCommands(process.execPath), regSync, warnReg);
-}
-
-function unregisterWindowsContextMenu() {
-  if (process.platform !== 'win32') {
-    return { ok: 0, failed: 0, total: 0 };
-  }
-  return runRegCommands(contextMenuUnregisterCommands(), regSync, warnReg);
-}
-
-const UPDATER = {
-  CORE_REGISTRY_SOURCES: [
-    { id: 'npmmirror-registry', kind: 'registry', url: 'https://registry.npmmirror.com/@deepseek-ai/dsh/latest' },
-    { id: 'npm-registry', kind: 'registry', url: 'https://registry.npmjs.org/@deepseek-ai/dsh/latest' }
-  ],
-  SHELL_MANIFEST_SOURCES: [
-    { id: 'github-raw', kind: 'github-raw', url: 'https://raw.githubusercontent.com/renquanpake/deepseek-harness-desktop/main/package.json' }
-  ],
-  GITHUB_RELEASE_SOURCES: [
-    { id: 'github-api', kind: 'github-api', url: 'https://api.github.com/repos/renquanpake/deepseek-harness-desktop/releases/latest' }
-  ],
-  GITHUB_DOWNLOAD_SOURCES: [
-    { id: 'github-api', kind: 'github-api', url: 'https://api.github.com/repos/renquanpake/deepseek-harness-desktop/releases/latest' }
-  ],
-  // 官方源优先；第三方镜像仅在本开关显式开启时参与，防止供应链投毒
-  ALLOW_THIRD_PARTY_PROXY: true,
-  REQUEST_TIMEOUT_MS: 8000,
-  DOWNLOAD_TIMEOUT_MS: 60000,
-  REGISTRY: 'https://registry.npmmirror.com',
-  isChecking: false
-};
-
-function coreRegistryCandidates() {
-  return resolveUpdateSources({
-    sources: UPDATER.CORE_REGISTRY_SOURCES,
-    allowThirdPartyProxy: UPDATER.ALLOW_THIRD_PARTY_PROXY
-  });
-}
-
-function shellManifestCandidates() {
-  return resolveUpdateSources({
-    sources: UPDATER.SHELL_MANIFEST_SOURCES,
-    allowThirdPartyProxy: UPDATER.ALLOW_THIRD_PARTY_PROXY
-  });
-}
-
-function releaseCandidates() {
-  return resolveUpdateSources({
-    sources: UPDATER.GITHUB_RELEASE_SOURCES,
-    allowThirdPartyProxy: UPDATER.ALLOW_THIRD_PARTY_PROXY
-  });
-}
-
-function downloadProxies() {
-  return resolveUpdateSources({
-    sources: UPDATER.GITHUB_DOWNLOAD_SOURCES,
-    allowThirdPartyProxy: UPDATER.ALLOW_THIRD_PARTY_PROXY
-  });
-}
-
-async function checkRemoteCoreVersion() {
-  return checkCoreFromUrls(coreRegistryCandidates());
-}
-
-async function checkRemoteShellVersion() {
-  return checkShellFromUrls(shellManifestCandidates(), releaseCandidates());
-}
-
-async function checkRemoteReleaseAssets() {
-  return checkReleaseFromUrls(releaseCandidates());
-}
 
 function setWindowProgress(title) {
   if (mainWindow) mainWindow.setTitle(title);
@@ -1357,7 +1250,7 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
     }
 
     if (shellInfo.needsUpdate && options.updateShell) {
-      const release = await checkRemoteReleaseAssets();
+      const release = await UPDATE_CHECK.checkReleaseAssets();
       if (!release) {
         dialog.showMessageBox(mainWindow, {
           type: 'warning',
@@ -1372,7 +1265,7 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
         setWindowProgress(t('dialog.progress.downloadShell', { percent: 0 }));
         await downloadWithProxies(release.installerUrl, installerPath, (percent) => {
           setWindowProgress(t('dialog.progress.downloadShell', { percent }));
-        }, { proxies: downloadProxies(), timeoutMs: UPDATER.DOWNLOAD_TIMEOUT_MS });
+        }, { proxies: UPDATE_CHECK.downloadProxies(), timeoutMs: UPDATE_CHECK.CONFIG.DOWNLOAD_TIMEOUT_MS });
 
         const integrity = verifyInstallerIntegrity(installerPath, release.sha256);
         if (!integrity.ok) {
@@ -1462,14 +1355,14 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
 }
 
 async function runUpdateCheck(silent = false) {
-  if (UPDATER.isChecking) return;
-  UPDATER.isChecking = true;
+  if (updateCheckInFlight) return;
+  updateCheckInFlight = true;
   try {
     const currentCore = getCurrentDshVersion();
     const currentShell = getShellVersion();
     const [remoteCore, remoteShell] = await Promise.all([
-      checkRemoteCoreVersion(),
-      checkRemoteShellVersion()
+      UPDATE_CHECK.checkCoreVersion(),
+      UPDATE_CHECK.checkShellVersion()
     ]);
     const coreInfo = {
       current: currentCore.version,
@@ -1493,7 +1386,7 @@ async function runUpdateCheck(silent = false) {
       await showUpdateCheckResult(false, coreInfo, shellInfo, remoteCore, remoteShell);
     }
   } finally {
-    UPDATER.isChecking = false;
+    updateCheckInFlight = false;
   }
 }
 
@@ -1610,7 +1503,7 @@ function buildNativeAppMenu() {
           label: t('menu.studio.pasteClipboard'),
           accelerator: 'Alt+Shift+V',
           click: () => {
-            feedClipboardIntoEditor();
+            clipboardBridge.feedClipboardIntoEditor();
           }
         },
         { type: 'separator' },
@@ -1813,6 +1706,14 @@ function isWindowsPlatform() {
   return process.platform === 'win32';
 }
 
+const clipboardBridge = createClipboardBridge({
+  clipboard,
+  getMainWindow: () => mainWindow,
+  getPortableDataRoot: () => PORTABLE_DATA_ROOT,
+  getEngine: () => currentEngine,
+  isWindowsPlatform
+});
+
 function registerRelayShortcut() {
   const preferred = 'Alt+Space';
   const ok = globalShortcut.register(preferred, toggleMainWindowVisibility);
@@ -1897,57 +1798,6 @@ function createMainWindow() {
     }
     mainWindow.hide();
   });
-}
-
-function saveClipboardImage(image) {
-  const captureDir = PORTABLE_DATA_ROOT
-    ? path.join(PORTABLE_DATA_ROOT, 'temp-captures')
-    : path.join(os.tmpdir(), 'dsh-studio-captures');
-  const target = path.join(
-    captureDir,
-    `clip-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`
-  );
-  try {
-    fs.mkdirSync(captureDir, { recursive: true });
-    fs.writeFileSync(target, image.toPNG());
-    console.warn(`[clipboard] 截图已落盘: ${target}`);
-    return target;
-  } catch (err) {
-    console.warn(`[clipboard] 截图落盘失败: ${err.message}`);
-    return null;
-  }
-}
-
-function convertToWslMountPath(windowsPath) {
-  if (typeof windowsPath !== 'string' || !windowsPath.trim()) return windowsPath;
-  return toWslPath(windowsPath.trim());
-}
-
-function feedClipboardIntoEditor() {
-  if (!mainWindow || !mainWindow.webContents) return;
-  if (currentEngine === 'wsl2' && isWindowsPlatform()) {
-    try {
-      const image = clipboard.readImage();
-      if (image && !image.isEmpty()) {
-        const imagePath = saveClipboardImage(image);
-        if (imagePath) {
-          mainWindow.webContents.send('dsh:inject-clipboard-text', convertToWslMountPath(imagePath));
-          return;
-        }
-      }
-    } catch (err) {
-      console.warn(`[clipboard] 读取剪贴板截图失败: ${err.message}`);
-    }
-  }
-  let text = '';
-  try {
-    text = clipboard.readText() || '';
-  } catch (err) {
-    console.warn(`[clipboard] 读取剪贴板文本失败: ${err.message}`);
-  }
-  if (text) {
-    mainWindow.webContents.send('dsh:inject-clipboard-text', text);
-  }
 }
 
 ipcMain.on('dsh:native-notify', (event, payload) => {
@@ -2085,7 +1935,7 @@ ipcMain.on('dsh:request-clipboard-paste', (event) => {
     console.warn(`[ipc] clipboard-paste rejected: ${err.message}`);
     return;
   }
-  feedClipboardIntoEditor();
+  clipboardBridge.feedClipboardIntoEditor();
 });
 
 ipcMain.handle('dsh:get-auto-start', (event) => {
@@ -2109,7 +1959,7 @@ ipcMain.handle('dsh:set-auto-start', (event, enable) => {
 ipcMain.handle('dsh:convert-to-wsl-path', (event, windowsPath) => {
   assertTrustedSender(event);
   assertIpcPayload('dsh:convert-to-wsl-path', windowsPath);
-  return convertToWslMountPath(windowsPath);
+  return clipboardBridge.convertToWslMountPath(windowsPath);
 });
 
 ipcMain.handle('dsh:get-workspace-status', (event) => {
