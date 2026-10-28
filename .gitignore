@@ -19,6 +19,7 @@ default-profile/
 
 # Internal tooling, guides & credentials
 .monkeycode/
+.agent-skills/
 .gdrive/
 docs/superpowers/
 README_PUSH_GUIDE.md

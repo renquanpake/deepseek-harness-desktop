@@ -1,0 +1,155 @@
+{
+  "menu": {
+    "app": {
+      "about": "关于 DeepSeek Harness",
+      "quit": "退出程序"
+    },
+    "studio": {
+      "title": "工作台 (Studio)",
+      "newWorktree": "新建独立工作区分支 (Git Worktree)...",
+      "pasteClipboard": "粘贴剪贴板截图/文本至输入框 (Alt+Shift+V)",
+      "alwaysOnTop": "窗口始终置顶 (悬浮伴侣模式)",
+      "autoStart": "开机自动启动 (Windows 登录自启)"
+    },
+    "engine": {
+      "title": "引擎与更新 (Engine & Updates)",
+      "status": "外壳 v{shell}  ·  DSH 内核 v{core} ({source})",
+      "sourceHotUpdate": "热更新内核",
+      "sourceFactory": "内置出厂内核",
+      "selfRepair": "🩺 环境自动体检与自愈 (清理死锁与重置连接)...",
+      "checkUpdates": "🔄 检查更新 (自动联检内核与外壳)",
+      "revertFactory": "⏪ 回退至出厂内置内核",
+      "winNative": "运行引擎：Windows 原生模式 (推荐，速度最快)",
+      "wsl2": "运行引擎：WSL2 兼容模式 (适用于 Linux 依赖工具)",
+      "safeMode": "故障排查安全模式 (临时禁用第三方插件)",
+      "restorePresets": "恢复出厂预置插件 (重置界面增强组件)"
+    },
+    "system": {
+      "title": "Windows 系统集成",
+      "registerContextMenu": "添加 Windows 文件夹右键快捷启动",
+      "unregisterContextMenu": "移除 Windows 文件夹右键快捷项",
+      "openDataDir": "打开 DSH 数据与插件目录",
+      "openDevTools": "打开开发者调试工具 (DevTools)"
+    }
+  },
+  "tray": {
+    "showWindow": "显示主窗口",
+    "checkUpdates": "检查更新",
+    "autoStart": "开机自动启动",
+    "quit": "退出 DSH Studio"
+  },
+  "dialog": {
+    "common": {
+      "ok": "我知道了",
+      "close": "关闭",
+      "cancel": "取消",
+      "unknown": "（未知）",
+      "dsStudioTitle": "DSH Studio"
+    },
+    "worktreeClose": {
+      "title": "Worktree 沙箱会话关闭",
+      "message": "当前窗口使用了独立的 Git Worktree 沙箱，请选择处理方式：",
+      "detail": "Worktree 路径：{path}\n分支：{branch}",
+      "keep": "保留目录并关闭",
+      "destroy": "销毁 Worktree 并清理分支（推荐）",
+      "cancel": "取消"
+    },
+    "openWorktreeDir": {
+      "title": "选择 Git 仓库目录以自动创建隔离 Worktree"
+    },
+    "rollback": {
+      "doneTitle": "已自动回滚内核",
+      "doneMessage": "检测到新版官方内核存在兼容性异常，系统已自动为您无感回滚至出厂稳定版。",
+      "doneDetail": "触发原因：{reason}\n当前已恢复由出厂内置 runtime 提供服务，工作台配置不受影响。",
+      "notReadyTitle": "回滚后仍未就绪",
+      "notReadyMessage": "已回滚至出厂稳定版，但后端服务仍未就绪。",
+      "notReadyDetail": "触发原因：{reason}\n可在「引擎与救援」菜单切换引擎或启用故障隔离安全模式。"
+    },
+    "revert": {
+      "failedTitle": "回退失败",
+      "failedMessage": "删除 local-runtime 目录失败: {message}",
+      "doneTitle": "已回退至出厂内置内核",
+      "doneMessage": "本地热更新内核已清理，当前使用安装包自带的出厂 dsh-runtime。"
+    },
+    "updateCheck": {
+      "title": "检查更新",
+      "upToDate": "当前已是最新状态！",
+      "upToDateDetail": "- DSH 官方内核版本：v{core} (最新)\n- 桌面外壳版本：v{shell} (最新)",
+      "availableTitle": "检测到可用更新",
+      "availableMessage": "发现可升级项，是否立即执行自动更新？",
+      "availableDetail": "检测到可用更新：\n- DSH 官方内核：v{coreCurrent} -> v{coreRemote} {coreTag}\n- 桌面宿主外壳：v{shellCurrent} -> v{shellRemote} {shellTag}\n\n是否立即自动下载并更新？",
+      "tagAvailable": "[可更新]",
+      "tagLatest": "[已最新]",
+      "unknownVersion": "未知",
+      "updateAll": "立即一键更新",
+      "updateCoreOnly": "仅更新 DSH 内核",
+      "updateNow": "立即更新"
+    },
+    "shellUpdate": {
+      "unavailableTitle": "外壳更新",
+      "unavailableMessage": "无法获取最新外壳安装包下载地址，请稍后重试或手动下载安装包。",
+      "portableTitle": "便携版更新",
+      "portableMessage": "便携版更新已下载完成",
+      "portableDetail": "解压或覆盖 {folder} 中的旧安装文件即可。用户数据保存在 portable-data 中，不会丢失。",
+      "confirmTitle": "安装客户端更新",
+      "confirmMessage": "桌面外壳更新包 (v{version}) 已就绪，是否立即启动安装程序？",
+      "confirmDetail": "{verify}\n启动安装程序后当前窗口将自动关闭。",
+      "verifyPassed": "✓ 官方 SHA-256 哈希校验已通过 ({hash}...)",
+      "verifyLocal": "本地 SHA-256 指纹: {hash}...",
+      "installNow": "立即安装",
+      "installLater": "稍后手动安装"
+    },
+    "hotUpdate": {
+      "successTitle": "热更新成功",
+      "successMessage": "DSH 内核已热更新到 {version}",
+      "successDetail": "后端已自动重启。若新版出现异常，可在「引擎与救援」→「⏪ 回退至出厂内置内核」一键回滚。",
+      "notReadyTitle": "热更新完成但后端未就绪",
+      "notReadyMessage": "DSH 内核已热更新到 {version}，但后端未能就绪。",
+      "notReadyDetail": "请在「引擎与救援」菜单检查引擎状态，或点击「⏪ 回退至出厂内置内核」回滚。"
+    },
+    "selfRepair": {
+      "title": "环境体检与自愈报告",
+      "readyMessage": "自愈完成，服务已就绪！",
+      "pendingMessage": "自愈执行完毕，正在等待服务重连...",
+      "detail": "{actions}\n\n当前端口: {port}\n引擎模式: {engine}",
+      "noActions": "• 系统环境检测正常，未发现死锁或异常标记。"
+    },
+    "wsl2Unavailable": {
+      "message": "WSL2 引擎仅在 Windows 主机上可用。"
+    },
+    "presetReset": {
+      "title": "预置插件重置",
+      "message": "已成功强制恢复出厂预置插件配置并重启工作台！"
+    },
+    "contextMenu": {
+      "title": "右键菜单集成",
+      "registerUnavailable": "右键菜单注册仅在 Windows 主机上可用。",
+      "registerSuccess": "注册成功（{ok}/{total}）！现在可在任意文件夹右键选择「Open in New Git Worktree (DSH Studio)」。",
+      "registerPartial": "部分成功（{ok}/{total}），{failed} 项写入失败，请检查系统权限。",
+      "unregisterUnavailable": "右键菜单移除仅在 Windows 主机上可用。",
+      "unregisterResult": "已尝试移除 {total} 组资源管理器右键菜单项（成功 {ok}，跳过 {failed}）。"
+    },
+    "backendNotReady": {
+      "message": "后端未能就绪，当前显示空白页。可在「引擎与救援」菜单切换引擎或选择安全模式。"
+    }
+  },
+  "notify": {
+    "defaultTitle": "DeepSeek Harness",
+    "backendNotReady": {
+      "title": "DSH Studio",
+      "body": "后端未能就绪，当前显示空白页。"
+    },
+    "updateAvailable": {
+      "title": "发现新版本",
+      "body": "检测到可用的 DSH 内核或外壳更新。"
+    }
+  },
+  "error": {
+    "backendStartFailed": "dsh 后端启动失败",
+    "backendCrashLoop": "后端连续崩溃，已停止自动重启。",
+    "autoUpdateFailed": "自动更新失败",
+    "nsisInstallFailed": "NSIS 安装启动失败",
+    "integrityCheckFailed": "安装包安全校验未通过",
+    "integrityCheckFailedMessage": "外壳更新包 SHA-256 校验失败（原因: {reason}），文件已被安全拦截并清理。"
+  }
+}

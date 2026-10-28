@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Node 22 checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          # package-lock.json 与 package.json 同步时使用 npm ci；
+          # 当前锁文件缺少依赖记录，npm ci 会直接失败，回退到 npm install。
+          if npm ci --dry-run --ignore-scripts --no-audit --no-fund > /dev/null 2>&1; then
+            npm ci --no-audit --no-fund
+          else
+            echo "::warning::package-lock.json is out of sync with package.json; falling back to npm install"
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Syntax check main.js
+        run: node --check main.js
+
+      - name: Syntax check preload.js
+        run: node --check preload.js
+
+      - name: Run tests
+        run: npm test

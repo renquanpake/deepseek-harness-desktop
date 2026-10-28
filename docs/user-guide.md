@@ -1,0 +1,256 @@
+# 用户指南
+
+本指南适用于 `DeepSeek Harness` 0.2.1 桌面外壳。界面菜单默认自动隐藏，按 `Alt` 显示菜单栏。
+
+## 1. 安装与首次启动
+
+### 系统要求
+
+- Windows 10 或 Windows 11，x64。
+- 安装版不需要单独安装 Node.js。
+- 使用 Worktree 沙箱需要系统可执行 `git`，并且目标目录是 Git 仓库。
+- 使用 WSL2 引擎需要 Windows 已安装 WSL2、默认发行版内有 Node.js 与 npx。
+
+### 安装
+
+运行 `DeepSeek Harness Setup 0.2.1.exe`。安装器为单文件一键安装、当前用户级安装，默认创建桌面快捷方式和开始菜单快捷方式，不提供安装目录选择。
+
+当前安装包没有做 Windows 代码签名，SmartScreen 可能显示未知发布者提示。签名状态见 `docs/release.md`。
+
+### 首次启动
+
+1. 双击桌面快捷方式启动。
+2. 启动页会显示连接、插件同步和 Token 校验提示。
+3. 后端通常在数秒内就绪；最长等待 30 秒。
+4. 8 秒后启动页会出现「环境自动体检」入口，可手动触发自愈。
+5. 进入工作台后，按 DSH 界面提示配置 DeepSeek API Key。
+
+首次启动会在 `%USERPROFILE%\.dsh` 创建数据目录，包括 `profiles/web` 插件配置和后续的 `local-runtime` 热更新内核。
+
+### 窗口与退出
+
+- 点击窗口关闭按钮时，如果托盘可用，窗口会隐藏到托盘，后端继续运行。
+- 从托盘菜单选择「显示主窗口」恢复。
+- 选择「工作台」→「退出程序」或托盘菜单「退出 DSH Studio」才会真正退出。
+- 从托盘或菜单退出不会触发 Worktree 关闭确认，Worktree 需要手动回收。
+
+### 单实例
+
+应用只允许一个实例运行。再次启动时会把已有窗口前置；如果新启动命令带有不同的工作区参数，会切换工作区并重启后端。
+
+## 2. 打开工作区
+
+### 默认工作区
+
+未指定参数时，外壳使用启动进程的当前工作目录。从开始菜单启动时，该目录通常不是 Git 仓库，建议通过菜单或命令行明确指定工作区。
+
+### 通过菜单打开
+
+「工作台」→「新建独立工作区分支 (Git Worktree)...」选择任意 Git 仓库目录。外壳会创建隔离 Worktree 并在其中启动后端。
+
+### 通过命令行打开
+
+直接打开目录：
+
+```powershell
+& "DeepSeek Harness.exe" --open-dir "D:\code\my-repo"
+```
+
+从该目录创建 Worktree 后打开：
+
+```powershell
+& "DeepSeek Harness.exe" --worktree-dir "D:\code\my-repo"
+```
+
+`--worktree-dir` 可简写为 `--worktree`。
+
+源码模式下通过 npm 传参：
+
+```bash
+npm start -- --open-dir "D:\code\my-repo"
+```
+
+### 通过右键菜单打开
+
+在「Windows 系统集成」中注册后，文件夹或文件夹空白处右键会出现：
+
+- 「Open with DeepSeek Harness Studio」：等价于 `--open-dir`。
+- 「Open in New Git Worktree (DSH Studio)」：等价于 `--worktree-dir`。
+
+便携版移动目录后需要重新注册。
+
+### 隐藏启动
+
+`--hidden` 和 `--minimized` 会让主窗口启动时保持隐藏，供开机自启动使用。普通使用不需要手动传入。
+
+## 3. Worktree 沙箱
+
+Worktree 用于在不影响主工作区的情况下执行任务。
+
+- 外壳在仓库同级目录创建 `<仓库名>-wt-<5 位随机串>`。
+- 自动创建临时分支 `dsh/task-<5 位随机串>`。
+- 后端工作目录指向该 Worktree，改动和提交都落在临时分支。
+- 创建失败时回退为直接打开原仓库目录，此时没有隔离效果，控制台会输出 `[git-worktree] Fallback to original dir`。
+
+### 关闭 Worktree 窗口
+
+关闭主窗口时会弹出确认框：
+
+- 「保留目录并关闭」：保留 Worktree 目录和临时分支，之后手动处理。
+- 「销毁 Worktree 并清理分支（推荐）」：结束占用进程，执行 `git worktree remove --force`，再删除临时分支。
+- 「取消」：返回窗口。
+
+从托盘或菜单退出不会弹出该确认框，也不会自动清理 Worktree。需要手动回收时参考 `docs/troubleshooting.md` 第 4 节。
+
+### 合并结果
+
+Worktree 中的提交位于 `dsh/task-*` 分支。需要保留成果时，在关闭前提交，再在主仓库中合并该分支。选择销毁会强制删除临时分支，未合并的提交将丢失。
+
+## 4. 便携模式
+
+便携模式把用户数据放在程序目录旁边，便于整体拷贝。
+
+### 启用方式
+
+在可执行文件同目录创建名为 `portable-data` 的目录，然后启动程序：
+
+```text
+DeepSeek Harness\
+  DeepSeek Harness.exe
+  portable-data\
+```
+
+也可以通过环境变量 `PORTABLE_EXECUTABLE_DIR` 指定程序目录；外壳会在该目录下创建或使用 `portable-data`。
+
+### 目录内容
+
+启用后，外壳会创建并使用：
+
+- `portable-data\.dsh`：DSH 数据、插件配置、热更新内核。
+- `portable-data\electron-userdata`：Electron 用户数据。
+- `portable-data\appdata-roaming`、`appdata-local`、`userprofile`：后端使用的 AppData 与用户目录。
+- `portable-data\home`：后端 HOME，并生成包含系统 `.gitconfig` 的便携配置。
+- `portable-data\temp-captures`：剪贴板截图。
+
+后端进程的 `USERPROFILE`、`APPDATA`、`HOME`、`AppData`、`LocalAppData` 会指向上述目录。
+
+### 注意事项
+
+- `portable-data` 不可写时，外壳会回退到 `%USERPROFILE%\.dsh`，控制台输出 `[portable]` 警告。
+- 当前 `electron-builder` 配置只生成 NSIS 安装包，没有配置 Portable 目标；便携目录需要自行准备。
+- 便携模式更新外壳时，更新器会把安装包显示在资源管理器中，由用户覆盖旧文件；`portable-data` 不会被删除。
+
+## 5. 全局快捷键与剪贴板注入
+
+### Alt+Space
+
+`Alt+Space` 全局呼出或隐藏主窗口。
+
+如果该组合被系统或其他应用占用，外壳会回退注册 `Ctrl+Alt+D`，并在控制台输出 `[main] Global shortcut Alt+Space is occupied`。界面不会额外提示。
+
+### Alt+Shift+V
+
+「工作台」→「粘贴剪贴板截图/文本至输入框」对应 `Alt+Shift+V`，把剪贴板内容注入当前可编辑输入框。
+
+行为说明：
+
+- Windows 原生模式读取剪贴板文本并追加到输入框。
+- WSL2 模式优先读取剪贴板图片，保存为 PNG 后转换成 `/mnt/...` 路径再注入。
+- 输入框已有内容时，文本会以两个换行分隔追加。
+- 目标为 `textarea`、`input` 或 `contenteditable` 元素；没有可编辑元素时不会注入。
+- 在输入框内粘贴纯图片时，渲染层会请求主进程重新读取剪贴板。
+
+截图文件位置：
+
+- 普通模式：`%TEMP%\dsh-studio-captures`。
+- 便携模式：`portable-data\temp-captures`。
+
+## 6. 引擎切换
+
+「引擎与更新」中提供两种运行引擎：
+
+- 「运行引擎：Windows 原生模式」：默认模式，使用安装包内置或热更新的 DSH 内核，速度最快。
+- 「运行引擎：WSL2 兼容模式」：通过 `wsl.exe` 在默认发行版内运行 `npx --yes @deepseek-ai/dsh`，适合依赖 Linux 工具链的场景。
+
+切换引擎会重启后端并重新加载页面。
+
+### WSL2 模式限制
+
+- 仅在 Windows 主机可用；其他系统选择后会提示并回到原生模式。
+- 需要 WSL2、默认发行版、`bash`、Node.js、npx 和可用网络。
+- 工作区路径会转换为 `/mnt/<盘符>/...`。
+- 不使用安装包内置 `dsh-runtime`，也不参与本地内核热更新和 15 秒看门狗。
+- 每次启动都通过 npx 获取内核，首次启动可能较慢。
+
+### 状态持久化
+
+引擎选择和安全模式都只保存在当前进程内。重启应用后恢复为 Windows 原生模式、安全模式关闭。
+
+## 7. 更新
+
+### 自动检查
+
+应用就绪 5 秒后会静默检查一次更新，发现新版本时弹窗询问。也可以手动打开：
+
+- 「引擎与更新」→「检查更新」
+- 托盘菜单「检查更新」
+
+### 内核热更新
+
+DSH 内核通过国内镜像安装到 `%USERPROFILE%\.dsh\local-runtime`，安装完成后自动重启后端。
+
+- 使用安装包内置的 Node.js 与 pnpm 执行安装。
+- 同步出厂预置插件依赖。
+- 启动后由 15 秒看门狗检查；失败会隔离新内核并回滚到出厂内核。
+- 可随时通过「引擎与更新」→「回退至出厂内置内核」手动回退。
+
+### 外壳更新
+
+外壳更新来自 GitHub Release，下载官方安装包并校验 SHA-256。
+
+- 安装版：确认后启动 NSIS 安装程序，当前窗口退出。
+- 便携版：只下载并显示安装包位置，由用户覆盖旧文件。
+- 校验失败的文件会被立即删除，更新中止。
+- Release 没有提供 SHA-256 时，界面只显示本地计算指纹，并由用户确认是否继续。
+
+### 回滚
+
+- 内核：菜单「回退至出厂内置内核」，或等待看门狗自动回滚。
+- 外壳：重新安装上一版安装包。用户数据位于 `.dsh` 或 `portable-data`，覆盖安装不会删除。
+
+自动更新只接受更高的语义化版本，不能通过发布旧版本让客户端自动降级。
+
+## 8. 卸载与数据位置
+
+### 卸载
+
+打开 Windows「设置」→「应用」→「已安装的应用」，找到 `DeepSeek Harness` 并卸载。安装器为当前用户级安装，通常不需要管理员权限。
+
+卸载程序不会删除用户数据。
+
+### 数据位置
+
+普通模式：
+
+| 内容 | 位置 |
+| --- | --- |
+| DSH 数据、插件、热更新内核 | `%USERPROFILE%\.dsh` |
+| Electron 用户数据 | `%APPDATA%\DeepSeek Harness` |
+| 剪贴板截图 | `%TEMP%\dsh-studio-captures` |
+| 外壳更新下载 | `%TEMP%` |
+
+便携模式：
+
+| 内容 | 位置 |
+| --- | --- |
+| DSH 数据、插件、热更新内核 | `<程序目录>\portable-data\.dsh` |
+| Electron 用户数据 | `<程序目录>\portable-data\electron-userdata` |
+| 剪贴板截图 | `<程序目录>\portable-data\temp-captures` |
+
+需要彻底清理时，在确认不再需要配置和会话记录后，手动删除上述目录。删除 `.dsh` 会同时删除插件配置和热更新内核。
+
+## 9. 相关文档
+
+- 故障排查：`docs/troubleshooting.md`
+- 发布、校验与回滚：`docs/release.md`
+- 构建与开发：仓库根目录 `README.md`

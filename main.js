@@ -11,7 +11,7 @@ const {
   dialog,
   clipboard
 } = require('electron');
-const { spawn, execSync } = require('child_process');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -27,6 +27,10 @@ const { isBackendHttp, isTrustedSender } = require('./lib/trusted-url');
 const { decideRestart, MAX_CRASH_RESTARTS } = require('./lib/backend-lifecycle');
 const { pickWorkspaceMode } = require('./lib/cli-workspace');
 const { runRegCommands } = require('./lib/win-reg');
+const { runGit, runReg, runTaskkill, runTasklist, readWindowsProcessCommandLine } = require('./lib/secure-exec');
+const { isBackendReadyStatus } = require('./lib/readiness');
+const { createSingleFlight } = require('./lib/restart-guard');
+const { assertValid: assertIpcPayload } = require('./lib/ipc-schema');
 const {
   semverCompare,
   isNewer,
@@ -37,7 +41,8 @@ const {
   verifyInstallerIntegrity,
   checkRemoteCoreVersion: checkCoreFromUrls,
   checkRemoteShellVersion: checkShellFromUrls,
-  checkRemoteReleaseAssets: checkReleaseFromUrls
+  checkRemoteReleaseAssets: checkReleaseFromUrls,
+  resolveUpdateSources
 } = require('./lib/updater');
 
 
@@ -305,12 +310,14 @@ function getBundledPnpmCjs() {
 }
 
 function getCurrentDshVersion() {
-  const pkgPath = path.join(getRuntimeDir(), 'node_modules', '@deepseek-ai', 'dsh', 'package.json');
+  const runtimeDir = getRuntimeDir();
+  const source = path.resolve(runtimeDir) === path.resolve(LOCAL_RUNTIME_DIR) ? 'hot-update' : 'factory';
+  const pkgPath = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json');
   try {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-    return { version: pkg.version || 'unknown', source: isLocalRuntimeUsable() ? 'hot-update' : 'factory' };
+    return { version: pkg.version || 'unknown', source };
   } catch {
-    return { version: 'unknown', source: isLocalRuntimeUsable() ? 'hot-update' : 'factory' };
+    return { version: 'unknown', source };
   }
 }
 
@@ -371,7 +378,7 @@ function createIsolatedGitWorktree(repoDir) {
     const parentDir = path.dirname(repoDir);
     const worktreePath = path.join(parentDir, `${baseName}-wt-${stamp}`);
     const branchName = `dsh/task-${stamp}`;
-    execSync(`git worktree add "${worktreePath}" -b "${branchName}"`, {
+    runGit(['worktree', 'add', worktreePath, '-b', branchName], {
       cwd: repoDir,
       stdio: 'ignore',
       windowsHide: true,
@@ -396,33 +403,12 @@ function isProcessAlive(pid) {
   }
 }
 
-function readProcessCommandLine(pid) {
-  const attempts = [
-    `wmic process where "ProcessId=${pid}" get CommandLine /FORMAT:LIST`,
-    `powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' | Select-Object -ExpandProperty CommandLine"`
-  ];
-  for (const command of attempts) {
-    try {
-      const output = execSync(command, {
-        encoding: 'utf8',
-        windowsHide: true,
-        timeout: WORKTREE_PROCESS_SCAN_TIMEOUT_MS,
-        maxBuffer: 2 * 1024 * 1024
-      });
-      if (output && String(output).trim()) return String(output);
-    } catch {
-      // wmic 在新版系统上可能已移除，继续尝试下一方式
-    }
-  }
-  return '';
-}
-
 function findWindowsProcessesWithWorkingDir(worktreePath) {
   const pids = new Set();
   if (!isWindowsPlatform() || !worktreePath) return [];
   try {
-    const output = execSync(
-      `tasklist /V /FI "IMAGENAME eq node.exe" /FO CSV /NH`,
+    const output = runTasklist(
+      ['/V', '/FI', 'IMAGENAME eq node.exe', '/FO', 'CSV', '/NH'],
       { encoding: 'utf8', windowsHide: true, timeout: WORKTREE_PROCESS_SCAN_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 }
     );
     const normalizedPath = worktreePath.toLowerCase().replace(/\s/g, '');
@@ -435,11 +421,11 @@ function findWindowsProcessesWithWorkingDir(worktreePath) {
       }
     }
     for (const pid of [...pids]) {
-      const commandLine = readProcessCommandLine(pid);
+      const commandLine = readWindowsProcessCommandLine(Number(pid));
       if (!commandLine) continue;
       if (commandLine.replace(/\s/g, '').toLowerCase().includes(normalizedPath)) {
         try {
-          execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', windowsHide: true });
+          runTaskkill(Number(pid));
           console.warn(`[git-worktree] 已结束工作区残留进程 PID ${pid}`);
         } catch (killErr) {
           console.warn(`[git-worktree] 结束残留进程失败 PID ${pid}: ${killErr.message}`);
@@ -456,7 +442,7 @@ function removeActiveWorktree() {
   if (!worktreePath) return false;
   findWindowsProcessesWithWorkingDir(worktreePath);
   try {
-    execSync(`git worktree remove "${worktreePath}" --force`, {
+    runGit(['worktree', 'remove', worktreePath, '--force'], {
       cwd: repoPath || worktreePath,
       stdio: 'ignore',
       windowsHide: true,
@@ -474,7 +460,7 @@ function removeActiveWorktree() {
   }
   if (repoPath && branchName) {
     try {
-      execSync(`git branch -D "${branchName}"`, {
+      runGit(['branch', '-D', branchName], {
         cwd: repoPath,
         stdio: 'ignore',
         windowsHide: true,
@@ -530,7 +516,7 @@ function killProcessTree() {
   dshProcess = null;
   try {
     if (process.platform === 'win32') {
-      execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', windowsHide: true });
+      runTaskkill(pid);
     } else {
       process.kill(-pid, 'SIGKILL');
     }
@@ -649,6 +635,14 @@ async function showLocalRuntimeFallbackNotice(reason, ready) {
   });
 }
 
+function describeBackendUrl(value) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return '[已脱敏]';
+  }
+}
+
 function startDshBackend(resetCrash = true) {
   killProcessTree();
   cleanStaleLocks(DSH_HOME);
@@ -708,11 +702,17 @@ function startDshBackend(resetCrash = true) {
       });
       useLocalRuntime = path.resolve(runtimeDir) === path.resolve(LOCAL_RUNTIME_DIR);
     } else {
-      dshProcess = spawn('npx', ['--yes', '@deepseek-ai/dsh', ...args], {
-        ...commonSpawnOpts,
-        shell: isWindows
-      });
-      useLocalRuntime = false;
+      dshProcess = null;
+      const missingMessage = [
+        '[dsh-backend] 未找到可用的 DSH 运行时，已停止启动（不再通过 npx 联网安装）。',
+        `runtimeDir: ${runtimeDir}`,
+        '请重新安装应用，或先运行 npm run runtime:prepare 生成运行时后重试。'
+      ].join('\n');
+      console.error(missingMessage);
+      if (!isQuitting && mainWindow) {
+        dialog.showErrorBox('DSH 运行时缺失', missingMessage);
+      }
+      return false;
     }
   }
   const proc = dshProcess;
@@ -722,12 +722,16 @@ function startDshBackend(resetCrash = true) {
   if (proc.stdout) {
     proc.stdout.on('data', (chunk) => {
       const line = String(chunk);
-      console.log(`[dsh] ${line}`);
+      const logLine = line.replace(
+        /dsh web:\s*(https?:\/\/[^\s()]+)/gi,
+        (_, url) => `dsh web: ${describeBackendUrl(url)}`
+      );
+      console.log(`[dsh] ${logLine}`);
       stdoutAccumulator += line;
       const match = stdoutAccumulator.match(/dsh web:\s*(https?:\/\/[^\s()]+)(?:[\r\n]|\s+\()/i);
       if (match && match[1]) {
         authenticatedBackendUrl = match[1].trim();
-        console.log(`[dsh-auth] 成功捕获启动认证 URL: ${authenticatedBackendUrl}`);
+        console.log(`[dsh-auth] 成功捕获启动认证 URL: ${describeBackendUrl(authenticatedBackendUrl)}`);
       }
       if (stdoutAccumulator.length > 20000) {
         stdoutAccumulator = stdoutAccumulator.slice(-5000);
@@ -804,6 +808,7 @@ function startDshBackend(resetCrash = true) {
       }, decision.delayMs);
     }
   });
+  return true;
 }
 
 function waitForBackendReady(timeoutMs = 30000) {
@@ -819,8 +824,15 @@ function waitForBackendReady(timeoutMs = 30000) {
     const check = () => {
       if (done) return;
       const req = http.get(`http://127.0.0.1:${currentPort}`, (res) => {
+        const statusCode = res.statusCode;
         res.resume();
-        finish(true);
+        if (isBackendReadyStatus(statusCode)) {
+          finish(true);
+        } else if (Date.now() - start > timeoutMs) {
+          finish(false);
+        } else {
+          setTimeout(check, 400);
+        }
       });
       req.on('error', () => {
         if (Date.now() - start > timeoutMs) {
@@ -840,11 +852,14 @@ function waitForBackendReady(timeoutMs = 30000) {
 
 // findAvailablePort imported from ./lib/env-utils
 
-async function restartWithCurrentConfig() {
+async function performRestartWithCurrentConfig() {
   isBackendReadyState = false;
   authenticatedBackendUrl = null;
   currentPort = await findAvailablePort(currentPort || 3080);
-  startDshBackend();
+  if (!startDshBackend()) {
+    isBackendReadyState = false;
+    return false;
+  }
   const ready = await waitForBackendReady();
   isBackendReadyState = Boolean(ready);
   if (ready && !authenticatedBackendUrl) {
@@ -866,36 +881,38 @@ async function restartWithCurrentConfig() {
   return ready;
 }
 
+const restartWithCurrentConfig = createSingleFlight(performRestartWithCurrentConfig);
+
 const CONTEXT_MENU_COMMAND_KEY_BG = 'HKCU\\Software\\Classes\\Directory\\Background\\shell';
 const CONTEXT_MENU_COMMAND_KEY_DIR = 'HKCU\\Software\\Classes\\Directory\\shell';
 
 function contextMenuRegisterCommands(exePath) {
   return [
-    `reg add "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen" /ve /d "Open with DeepSeek Harness Studio" /f`,
-    `reg add "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen" /v "Icon" /d "\\"${exePath}\\"" /f`,
-    `reg add "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen\\command" /ve /d "\\"${exePath}\\" --open-dir \\"%V\\"" /f`,
-    `reg add "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen" /ve /d "Open with DeepSeek Harness Studio" /f`,
-    `reg add "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen" /v "Icon" /d "\\"${exePath}\\"" /f`,
-    `reg add "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen\\command" /ve /d "\\"${exePath}\\" --open-dir \\"%1\\"" /f`,
-    `reg add "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree" /ve /d "Open in New Git Worktree (DSH Studio)" /f`,
-    `reg add "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree" /v "Icon" /d "\\"${exePath}\\"" /f`,
-    `reg add "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree\\command" /ve /d "\\"${exePath}\\" --worktree-dir \\"%V\\"" /f`,
-    `reg add "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree" /ve /d "Open in New Git Worktree (DSH Studio)" /f`,
-    `reg add "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree" /v "Icon" /d "\\"${exePath}\\"" /f`,
-    `reg add "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree\\command" /ve /d "\\"${exePath}\\" --worktree-dir \\"%1\\"" /f`
+    ['add', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen`, '/ve', '/d', 'Open with DeepSeek Harness Studio', '/f'],
+    ['add', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen`, '/v', 'Icon', '/d', `"${exePath}"`, '/f'],
+    ['add', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen\\command`, '/ve', '/d', `"${exePath}" --open-dir "%V%"`, '/f'],
+    ['add', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen`, '/ve', '/d', 'Open with DeepSeek Harness Studio', '/f'],
+    ['add', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen`, '/v', 'Icon', '/d', `"${exePath}"`, '/f'],
+    ['add', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen\\command`, '/ve', '/d', `"${exePath}" --open-dir "%1"`, '/f'],
+    ['add', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree`, '/ve', '/d', 'Open in New Git Worktree (DSH Studio)', '/f'],
+    ['add', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree`, '/v', 'Icon', '/d', `"${exePath}"`, '/f'],
+    ['add', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree\\command`, '/ve', '/d', `"${exePath}" --worktree-dir "%V%"`, '/f'],
+    ['add', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree`, '/ve', '/d', 'Open in New Git Worktree (DSH Studio)', '/f'],
+    ['add', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree`, '/v', 'Icon', '/d', `"${exePath}"`, '/f'],
+    ['add', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree\\command`, '/ve', '/d', `"${exePath}" --worktree-dir "%1"`, '/f']
   ];
 }
 
 function contextMenuUnregisterCommands() {
   return [
-    `reg delete "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen" /f`,
-    `reg delete "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen" /f`,
-    `reg delete "${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree" /f`,
-    `reg delete "${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree" /f`
+    ['delete', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioOpen`, '/f'],
+    ['delete', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioOpen`, '/f'],
+    ['delete', `${CONTEXT_MENU_COMMAND_KEY_BG}\\DSHStudioWorktree`, '/f'],
+    ['delete', `${CONTEXT_MENU_COMMAND_KEY_DIR}\\DSHStudioWorktree`, '/f']
   ];
 }
 
-const regSync = (cmd) => execSync(cmd, { windowsHide: true });
+const regSync = (args) => runReg(args);
 const warnReg = (cmd, err) => console.warn(`[reg-menu] Skipped key: ${cmd}\nReason: ${err.message}`);
 
 function registerWindowsContextMenu() {
@@ -913,39 +930,65 @@ function unregisterWindowsContextMenu() {
 }
 
 const UPDATER = {
-  CORE_REGISTRY_URLS: [
-    'https://registry.npmmirror.com/@deepseek-ai/dsh/latest',
-    'https://registry.npmjs.org/@deepseek-ai/dsh/latest'
+  CORE_REGISTRY_SOURCES: [
+    { id: 'npmmirror-registry', kind: 'registry', url: 'https://registry.npmmirror.com/@deepseek-ai/dsh/latest' },
+    { id: 'npm-registry', kind: 'registry', url: 'https://registry.npmjs.org/@deepseek-ai/dsh/latest' }
   ],
-  SHELL_MANIFEST_URLS: [
-    'https://fastly.jsdelivr.net/gh/renquanpake/deepseek-harness-desktop@main/package.json',
-    'https://ghfast.top/https://raw.githubusercontent.com/renquanpake/deepseek-harness-desktop/main/package.json',
-    'https://raw.githubusercontent.com/renquanpake/deepseek-harness-desktop/main/package.json'
+  SHELL_MANIFEST_SOURCES: [
+    { id: 'github-raw', kind: 'github-raw', url: 'https://raw.githubusercontent.com/renquanpake/deepseek-harness-desktop/main/package.json' }
   ],
-  GITHUB_RELEASE_URLS: [
-    'https://api.github.com/repos/renquanpake/deepseek-harness-desktop/releases/latest',
-    'https://ghfast.top/https://api.github.com/repos/renquanpake/deepseek-harness-desktop/releases/latest'
+  GITHUB_RELEASE_SOURCES: [
+    { id: 'github-api', kind: 'github-api', url: 'https://api.github.com/repos/renquanpake/deepseek-harness-desktop/releases/latest' }
   ],
-  GITHUB_DOWNLOAD_PROXIES: [
-    'https://ghfast.top/',
-    'https://mirror.ghproxy.com/'
+  GITHUB_DOWNLOAD_SOURCES: [
+    { id: 'github-api', kind: 'github-api', url: 'https://api.github.com/repos/renquanpake/deepseek-harness-desktop/releases/latest' }
   ],
+  // 官方源优先；第三方镜像仅在本开关显式开启时参与，防止供应链投毒
+  ALLOW_THIRD_PARTY_PROXY: true,
   REQUEST_TIMEOUT_MS: 8000,
   DOWNLOAD_TIMEOUT_MS: 60000,
   REGISTRY: 'https://registry.npmmirror.com',
   isChecking: false
 };
 
+function coreRegistryCandidates() {
+  return resolveUpdateSources({
+    sources: UPDATER.CORE_REGISTRY_SOURCES,
+    allowThirdPartyProxy: UPDATER.ALLOW_THIRD_PARTY_PROXY
+  });
+}
+
+function shellManifestCandidates() {
+  return resolveUpdateSources({
+    sources: UPDATER.SHELL_MANIFEST_SOURCES,
+    allowThirdPartyProxy: UPDATER.ALLOW_THIRD_PARTY_PROXY
+  });
+}
+
+function releaseCandidates() {
+  return resolveUpdateSources({
+    sources: UPDATER.GITHUB_RELEASE_SOURCES,
+    allowThirdPartyProxy: UPDATER.ALLOW_THIRD_PARTY_PROXY
+  });
+}
+
+function downloadProxies() {
+  return resolveUpdateSources({
+    sources: UPDATER.GITHUB_DOWNLOAD_SOURCES,
+    allowThirdPartyProxy: UPDATER.ALLOW_THIRD_PARTY_PROXY
+  });
+}
+
 async function checkRemoteCoreVersion() {
-  return checkCoreFromUrls(UPDATER.CORE_REGISTRY_URLS);
+  return checkCoreFromUrls(coreRegistryCandidates());
 }
 
 async function checkRemoteShellVersion() {
-  return checkShellFromUrls(UPDATER.SHELL_MANIFEST_URLS, UPDATER.GITHUB_RELEASE_URLS);
+  return checkShellFromUrls(shellManifestCandidates(), releaseCandidates());
 }
 
 async function checkRemoteReleaseAssets() {
-  return checkReleaseFromUrls(UPDATER.GITHUB_RELEASE_URLS);
+  return checkReleaseFromUrls(releaseCandidates());
 }
 
 function setWindowProgress(title) {
@@ -1249,7 +1292,7 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
         setWindowProgress('正在下载客户端外壳更新 (0%)...');
         await downloadWithProxies(release.installerUrl, installerPath, (percent) => {
           setWindowProgress(`正在下载客户端外壳更新 (${percent}%)...`);
-        }, { proxies: UPDATER.GITHUB_DOWNLOAD_PROXIES, timeoutMs: UPDATER.DOWNLOAD_TIMEOUT_MS });
+        }, { proxies: downloadProxies(), timeoutMs: UPDATER.DOWNLOAD_TIMEOUT_MS });
 
         const integrity = verifyInstallerIntegrity(installerPath, release.sha256);
         if (!integrity.ok) {
@@ -1823,6 +1866,7 @@ function feedClipboardIntoEditor() {
 ipcMain.on('dsh:native-notify', (event, payload) => {
   try {
     assertTrustedSender(event);
+    assertIpcPayload('dsh:native-notify', payload);
   } catch (err) {
     console.warn(`[ipc] native-notify rejected: ${err.message}`);
     return;
@@ -1846,6 +1890,7 @@ ipcMain.on('dsh:native-notify', (event, payload) => {
 
 ipcMain.handle('dsh:get-runtime-info', (event) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:get-runtime-info', undefined);
   return {
     version: getShellVersion(),
     coreVersion: getCurrentDshVersion().version,
@@ -1859,6 +1904,7 @@ ipcMain.handle('dsh:get-runtime-info', (event) => {
 
 ipcMain.handle('dsh:get-backend-status', (event) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:get-backend-status', undefined);
   return {
     ready: Boolean(isBackendReadyState && dshProcess),
     url: authenticatedBackendUrl || `http://127.0.0.1:${currentPort}`,
@@ -1870,6 +1916,7 @@ ipcMain.handle('dsh:get-backend-status', (event) => {
 
 ipcMain.handle('dsh:set-always-on-top', (event, enable) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:set-always-on-top', enable);
   if (mainWindow) {
     mainWindow.setAlwaysOnTop(Boolean(enable));
   }
@@ -1878,18 +1925,21 @@ ipcMain.handle('dsh:set-always-on-top', (event, enable) => {
 
 ipcMain.handle('dsh:get-plugin-inventory', (event) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:get-plugin-inventory', undefined);
   const names = readFactoryPresetPluginNames();
   return { plugins: names };
 });
 
 ipcMain.handle('dsh:rehydrate-plugins', (event) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:rehydrate-plugins', undefined);
   hydratePresetPluginsIfNeeded();
   return { ok: true };
 });
 
 ipcMain.handle('dsh:create-worktree-dialog', async (event) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:create-worktree-dialog', undefined);
   const res = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
     title: '选择 Git 仓库目录以自动创建隔离 Worktree'
@@ -1906,6 +1956,7 @@ ipcMain.handle('dsh:create-worktree-dialog', async (event) => {
 
 ipcMain.handle('dsh:switch-engine', async (event, mode) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:switch-engine', mode);
   if (mode !== 'win-native' && mode !== 'wsl2') {
     throw new Error(`Unsupported engine mode: ${mode}`);
   }
@@ -1919,6 +1970,7 @@ ipcMain.handle('dsh:switch-engine', async (event, mode) => {
 
 ipcMain.handle('dsh:restart-safe-mode', async (event) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:restart-safe-mode', undefined);
   isSafeMode = !isSafeMode;
   await restartWithCurrentConfig();
   return { safeMode: isSafeMode };
@@ -1926,12 +1978,14 @@ ipcMain.handle('dsh:restart-safe-mode', async (event) => {
 
 ipcMain.handle('dsh:register-context-menu', (event) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:register-context-menu', undefined);
   const result = registerWindowsContextMenu();
   return result.total > 0 && result.failed === 0;
 });
 
 ipcMain.handle('dsh:unregister-context-menu', (event) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:unregister-context-menu', undefined);
   const result = unregisterWindowsContextMenu();
   return result.total > 0 && result.failed === 0;
 });
@@ -1939,6 +1993,7 @@ ipcMain.handle('dsh:unregister-context-menu', (event) => {
 ipcMain.on('dsh:request-clipboard-paste', (event) => {
   try {
     assertTrustedSender(event);
+    assertIpcPayload('dsh:request-clipboard-paste', undefined);
   } catch (err) {
     console.warn(`[ipc] clipboard-paste rejected: ${err.message}`);
     return;
@@ -1948,11 +2003,13 @@ ipcMain.on('dsh:request-clipboard-paste', (event) => {
 
 ipcMain.handle('dsh:get-auto-start', (event) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:get-auto-start', undefined);
   return getAutoStart(app);
 });
 
 ipcMain.handle('dsh:set-auto-start', (event, enable) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:set-auto-start', enable);
   const result = setAutoStart(app, Boolean(enable));
   if (mainWindow && mainWindow.webContents) {
     mainWindow.webContents.send('dsh:auto-start-changed', result);
@@ -1964,11 +2021,13 @@ ipcMain.handle('dsh:set-auto-start', (event, enable) => {
 
 ipcMain.handle('dsh:convert-to-wsl-path', (event, windowsPath) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:convert-to-wsl-path', windowsPath);
   return convertToWslMountPath(windowsPath);
 });
 
 ipcMain.handle('dsh:get-workspace-status', (event) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:get-workspace-status', undefined);
   return {
     isWorktree: targetWorkspaceIsWorktree,
     worktreePath: activeWorktreeSession.worktreePath,
@@ -1979,6 +2038,7 @@ ipcMain.handle('dsh:get-workspace-status', (event) => {
 
 ipcMain.handle('dsh:run-self-repair', async (event) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:run-self-repair', undefined);
   console.log('[self-repair] 触发自动检修与自愈...');
   const report = runSelfRepair({
     dshHome: DSH_HOME,
@@ -1994,6 +2054,7 @@ ipcMain.handle('dsh:run-self-repair', async (event) => {
 
 ipcMain.handle('dsh:check-update', (event) => {
   assertTrustedSender(event);
+  assertIpcPayload('dsh:check-update', undefined);
   runUpdateCheck(false);
   return { ok: true };
 });

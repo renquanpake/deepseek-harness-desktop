@@ -1,0 +1,155 @@
+{
+  "menu": {
+    "app": {
+      "about": "About DeepSeek Harness",
+      "quit": "Quit"
+    },
+    "studio": {
+      "title": "Studio",
+      "newWorktree": "New Isolated Workspace Branch (Git Worktree)...",
+      "pasteClipboard": "Paste Clipboard Screenshot/Text into Input (Alt+Shift+V)",
+      "alwaysOnTop": "Always on Top (Floating Companion Mode)",
+      "autoStart": "Start on Login (Windows Login)"
+    },
+    "engine": {
+      "title": "Engine & Updates",
+      "status": "Shell v{shell}  ·  DSH Core v{core} ({source})",
+      "sourceHotUpdate": "Hot-updated core",
+      "sourceFactory": "Bundled factory core",
+      "selfRepair": "🩺 Automatic Environment Check & Self-Repair (Clear Deadlocks and Reset Connections)...",
+      "checkUpdates": "🔄 Check for Updates (Core and Shell)",
+      "revertFactory": "⏪ Revert to Bundled Factory Core",
+      "winNative": "Engine: Windows Native Mode (Recommended, Fastest)",
+      "wsl2": "Engine: WSL2 Compatibility Mode (For Linux-Dependent Tools)",
+      "safeMode": "Troubleshooting Safe Mode (Temporarily Disable Third-Party Plugins)",
+      "restorePresets": "Restore Factory Preset Plugins (Reset UI Enhancement Components)"
+    },
+    "system": {
+      "title": "Windows System Integration",
+      "registerContextMenu": "Add Windows Folder Context Menu Shortcut",
+      "unregisterContextMenu": "Remove Windows Folder Context Menu Shortcut",
+      "openDataDir": "Open DSH Data and Plugin Directory",
+      "openDevTools": "Open Developer Tools (DevTools)"
+    }
+  },
+  "tray": {
+    "showWindow": "Show Main Window",
+    "checkUpdates": "Check for Updates",
+    "autoStart": "Start on Login",
+    "quit": "Quit DSH Studio"
+  },
+  "dialog": {
+    "common": {
+      "ok": "Got It",
+      "close": "Close",
+      "cancel": "Cancel",
+      "unknown": "(Unknown)",
+      "dsStudioTitle": "DSH Studio"
+    },
+    "worktreeClose": {
+      "title": "Close Worktree Sandbox Session",
+      "message": "This window is using an isolated Git Worktree sandbox. Choose how to proceed:",
+      "detail": "Worktree path: {path}\nBranch: {branch}",
+      "keep": "Keep Directory and Close",
+      "destroy": "Destroy Worktree and Clean Up Branch (Recommended)",
+      "cancel": "Cancel"
+    },
+    "openWorktreeDir": {
+      "title": "Select a Git Repository Directory to Create an Isolated Worktree"
+    },
+    "rollback": {
+      "doneTitle": "Core Automatically Rolled Back",
+      "doneMessage": "A compatibility issue was detected in the new official core. The system has automatically and seamlessly rolled back to the factory-stable version.",
+      "doneDetail": "Trigger reason: {reason}\nService is now provided by the bundled factory runtime. Your workspace configuration is unaffected.",
+      "notReadyTitle": "Still Not Ready After Rollback",
+      "notReadyMessage": "Rolled back to the factory-stable version, but the backend service is still not ready.",
+      "notReadyDetail": "Trigger reason: {reason}\nUse the \"Engine & Updates\" menu to switch engines or enable troubleshooting safe mode."
+    },
+    "revert": {
+      "failedTitle": "Revert Failed",
+      "failedMessage": "Failed to delete the local-runtime directory: {message}",
+      "doneTitle": "Reverted to Bundled Factory Core",
+      "doneMessage": "The locally hot-updated core has been removed. The factory dsh-runtime bundled with the installer is now in use."
+    },
+    "updateCheck": {
+      "title": "Check for Updates",
+      "upToDate": "You are already up to date!",
+      "upToDateDetail": "- DSH official core version: v{core} (latest)\n- Desktop shell version: v{shell} (latest)",
+      "availableTitle": "Updates Available",
+      "availableMessage": "Upgradable items were found. Download and install updates now?",
+      "availableDetail": "Updates available:\n- DSH official core: v{coreCurrent} -> v{coreRemote} {coreTag}\n- Desktop shell: v{shellCurrent} -> v{shellRemote} {shellTag}\n\nDownload and install automatically now?",
+      "tagAvailable": "[Update available]",
+      "tagLatest": "[Latest]",
+      "unknownVersion": "Unknown",
+      "updateAll": "Update Everything Now",
+      "updateCoreOnly": "Update DSH Core Only",
+      "updateNow": "Update Now"
+    },
+    "shellUpdate": {
+      "unavailableTitle": "Shell Update",
+      "unavailableMessage": "Unable to get the download URL for the latest shell installer. Please try again later or download the installer manually.",
+      "portableTitle": "Portable Edition Update",
+      "portableMessage": "The portable edition update has been downloaded",
+      "portableDetail": "Extract or overwrite the old installation files in {folder}. User data is stored in portable-data and will not be lost.",
+      "confirmTitle": "Install Client Update",
+      "confirmMessage": "The desktop shell update package (v{version}) is ready. Start the installer now?",
+      "confirmDetail": "{verify}\nThe current window will close automatically after the installer starts.",
+      "verifyPassed": "✓ Official SHA-256 hash verification passed ({hash}...)",
+      "verifyLocal": "Local SHA-256 fingerprint: {hash}...",
+      "installNow": "Install Now",
+      "installLater": "Install Manually Later"
+    },
+    "hotUpdate": {
+      "successTitle": "Hot Update Successful",
+      "successMessage": "DSH core has been hot-updated to {version}",
+      "successDetail": "The backend restarted automatically. If the new version misbehaves, use \"Engine & Updates\" → \"⏪ Revert to Bundled Factory Core\" for a one-click rollback.",
+      "notReadyTitle": "Hot Update Completed but Backend Not Ready",
+      "notReadyMessage": "DSH core has been hot-updated to {version}, but the backend is not ready.",
+      "notReadyDetail": "Check the engine status in the \"Engine & Updates\" menu, or click \"⏪ Revert to Bundled Factory Core\" to roll back."
+    },
+    "selfRepair": {
+      "title": "Environment Check and Self-Repair Report",
+      "readyMessage": "Self-repair completed. The service is ready!",
+      "pendingMessage": "Self-repair finished. Waiting for the service to reconnect...",
+      "detail": "{actions}\n\nCurrent port: {port}\nEngine mode: {engine}",
+      "noActions": "• System environment is normal; no deadlocks or abnormal markers found."
+    },
+    "wsl2Unavailable": {
+      "message": "The WSL2 engine is only available on Windows hosts."
+    },
+    "presetReset": {
+      "title": "Preset Plugins Reset",
+      "message": "Factory preset plugin configuration has been force-restored and the workspace restarted!"
+    },
+    "contextMenu": {
+      "title": "Context Menu Integration",
+      "registerUnavailable": "Context menu registration is only available on Windows hosts.",
+      "registerSuccess": "Registration succeeded ({ok}/{total})! You can now right-click any folder and choose \"Open in New Git Worktree (DSH Studio)\".",
+      "registerPartial": "Partially succeeded ({ok}/{total}); {failed} entries failed to write. Please check system permissions.",
+      "unregisterUnavailable": "Context menu removal is only available on Windows hosts.",
+      "unregisterResult": "Attempted to remove {total} Explorer context menu groups (succeeded {ok}, skipped {failed})."
+    },
+    "backendNotReady": {
+      "message": "The backend is not ready, so a blank page is shown. Use the \"Engine & Updates\" menu to switch engines or choose safe mode."
+    }
+  },
+  "notify": {
+    "defaultTitle": "DeepSeek Harness",
+    "backendNotReady": {
+      "title": "DSH Studio",
+      "body": "The backend is not ready, so a blank page is shown."
+    },
+    "updateAvailable": {
+      "title": "New Version Available",
+      "body": "A DSH core or shell update is available."
+    }
+  },
+  "error": {
+    "backendStartFailed": "Failed to start dsh backend",
+    "backendCrashLoop": "The backend crashed repeatedly. Automatic restart has been stopped.",
+    "autoUpdateFailed": "Automatic update failed",
+    "nsisInstallFailed": "Failed to launch NSIS installer",
+    "integrityCheckFailed": "Installer Security Verification Failed",
+    "integrityCheckFailedMessage": "Shell update package SHA-256 verification failed (reason: {reason}). The file has been blocked and removed for security."
+  }
+}

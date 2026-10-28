@@ -3,6 +3,8 @@
 > 专为国内开发者与 Windows 平台深度调优的 DeepSeek Harness (DSH) 原生一体化桌面客户端。  
 > 开箱即用 · 单窗口沉浸一体化 · 零外跳浏览器 · 自动 Token 认证 · 启动自愈排障 · 预置出厂插件。
 
+详细文档：[用户指南](docs/user-guide.md) | [发布与校验](docs/release.md) | [故障排查](docs/troubleshooting.md)
+
 ---
 
 ## 🚀 极速上手与构建指南
