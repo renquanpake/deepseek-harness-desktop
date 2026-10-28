@@ -32,7 +32,7 @@ const { registerWindowsContextMenu, unregisterWindowsContextMenu } = require('./
 const { runTaskkill } = require('./lib/secure-exec');
 const { isBackendReadyStatus } = require('./lib/readiness');
 const { createSingleFlight } = require('./lib/restart-guard');
-const { assertValid: assertIpcPayload } = require('./lib/ipc-schema');
+const { registerIpcHandlers } = require('./src/ipc');
 const {
   APP_SCHEME,
   APP_HOST,
@@ -1650,200 +1650,140 @@ function createMainWindow() {
   });
 }
 
-ipcMain.on('dsh:native-notify', (event, payload) => {
-  try {
-    assertTrustedSender(event);
-    assertIpcPayload('dsh:native-notify', payload);
-  } catch (err) {
-    console.warn(`[ipc] native-notify rejected: ${err.message}`);
-    return;
-  }
-  const { title, body } = payload || {};
-  if (mainWindow && !mainWindow.isFocused()) {
-    mainWindow.flashFrame(true);
-  }
-  if (Notification.isSupported()) {
-    const notice = new Notification({ title, body });
-    notice.on('click', () => {
-      if (mainWindow) {
-        mainWindow.show();
-        mainWindow.focus();
-        mainWindow.flashFrame(false);
+registerIpcHandlers({
+  ipcMain,
+  assertTrustedSender,
+  actions: {
+    nativeNotify(payload) {
+      const { title, body } = payload || {};
+      if (mainWindow && !mainWindow.isFocused()) {
+        mainWindow.flashFrame(true);
       }
-    });
-    notice.show();
-  }
-});
-
-ipcMain.handle('dsh:get-runtime-info', (event) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:get-runtime-info', undefined);
-  return {
-    version: getShellVersion(),
-    coreVersion: getCurrentDshVersion().version,
-    port: currentPort,
-    engine: currentEngine,
-    safeMode: isSafeMode,
-    home: DSH_HOME,
-    workspaceDir: targetWorkspaceDir
-  };
-});
-
-ipcMain.handle('dsh:get-backend-status', (event) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:get-backend-status', undefined);
-  return {
-    ready: Boolean(isBackendReadyState && dshProcess),
-    url: authenticatedBackendUrl || `http://127.0.0.1:${currentPort}`,
-    port: currentPort,
-    engine: currentEngine,
-    workspaceDir: targetWorkspaceDir
-  };
-});
-
-ipcMain.handle('dsh:set-always-on-top', (event, enable) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:set-always-on-top', enable);
-  if (mainWindow) {
-    mainWindow.setAlwaysOnTop(Boolean(enable));
-  }
-  return Boolean(enable);
-});
-
-ipcMain.handle('dsh:get-plugin-inventory', (event) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:get-plugin-inventory', undefined);
-  const names = readFactoryPresetPluginNames();
-  return { plugins: names };
-});
-
-ipcMain.handle('dsh:rehydrate-plugins', (event) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:rehydrate-plugins', undefined);
-  hydratePresetPluginsIfNeeded();
-  return { ok: true };
-});
-
-ipcMain.handle('dsh:create-worktree-dialog', async (event) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:create-worktree-dialog', undefined);
-  const res = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory'],
-    title: t('dialog.openWorktreeDir.title')
-  });
-  if (!res.canceled && res.filePaths[0]) {
-    const session = worktreeManager.createIsolatedGitWorktree(res.filePaths[0]);
-    if (session.created) {
-      switchWorkspace(session.worktreePath, session);
+      if (Notification.isSupported()) {
+        const notice = new Notification({ title, body });
+        notice.on('click', () => {
+          if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+            mainWindow.flashFrame(false);
+          }
+        });
+        notice.show();
+      }
+    },
+    requestClipboardPaste() {
+      clipboardBridge.feedClipboardIntoEditor();
+    },
+    'dsh:get-runtime-info'() {
+      return {
+        version: getShellVersion(),
+        coreVersion: getCurrentDshVersion().version,
+        port: currentPort,
+        engine: currentEngine,
+        safeMode: isSafeMode,
+        home: DSH_HOME,
+        workspaceDir: targetWorkspaceDir
+      };
+    },
+    'dsh:get-backend-status'() {
+      return {
+        ready: Boolean(isBackendReadyState && dshProcess),
+        url: authenticatedBackendUrl || `http://127.0.0.1:${currentPort}`,
+        port: currentPort,
+        engine: currentEngine,
+        workspaceDir: targetWorkspaceDir
+      };
+    },
+    'dsh:set-always-on-top'(enable) {
+      if (mainWindow) {
+        mainWindow.setAlwaysOnTop(Boolean(enable));
+      }
+      return Boolean(enable);
+    },
+    'dsh:get-plugin-inventory'() {
+      const names = readFactoryPresetPluginNames();
+      return { plugins: names };
+    },
+    'dsh:rehydrate-plugins'() {
+      hydratePresetPluginsIfNeeded();
+      return { ok: true };
+    },
+    async 'dsh:create-worktree-dialog'() {
+      const res = await dialog.showOpenDialog(mainWindow, {
+        properties: ['openDirectory'],
+        title: t('dialog.openWorktreeDir.title')
+      });
+      if (!res.canceled && res.filePaths[0]) {
+        const session = worktreeManager.createIsolatedGitWorktree(res.filePaths[0]);
+        if (session.created) {
+          switchWorkspace(session.worktreePath, session);
+          await restartWithCurrentConfig();
+        }
+      }
+      return { ok: true };
+    },
+    async 'dsh:switch-engine'(mode) {
+      if (mode === 'wsl2' && process.platform !== 'win32') {
+        throw new Error('wsl2 engine is only available on Windows hosts');
+      }
+      currentEngine = mode;
       await restartWithCurrentConfig();
+      return { engine: currentEngine };
+    },
+    async 'dsh:restart-safe-mode'() {
+      isSafeMode = !isSafeMode;
+      await restartWithCurrentConfig();
+      return { safeMode: isSafeMode };
+    },
+    'dsh:register-context-menu'() {
+      const result = registerWindowsContextMenu();
+      return result.total > 0 && result.failed === 0;
+    },
+    'dsh:unregister-context-menu'() {
+      const result = unregisterWindowsContextMenu();
+      return result.total > 0 && result.failed === 0;
+    },
+    'dsh:get-auto-start'() {
+      return getAutoStart(app);
+    },
+    'dsh:set-auto-start'(enable) {
+      const result = setAutoStart(app, Boolean(enable));
+      if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('dsh:auto-start-changed', result);
+      }
+      buildNativeAppMenu();
+      updateTrayMenu();
+      return result;
+    },
+    'dsh:convert-to-wsl-path'(windowsPath) {
+      return clipboardBridge.convertToWslMountPath(windowsPath);
+    },
+    'dsh:get-workspace-status'() {
+      return {
+        isWorktree: targetWorkspaceIsWorktree,
+        worktreePath: activeWorktreeSession.worktreePath,
+        worktreeBranch: activeWorktreeSession.branchName,
+        engine: currentEngine
+      };
+    },
+    async 'dsh:run-self-repair'() {
+      console.log('[self-repair] 触发自动检修与自愈...');
+      const report = runSelfRepair({
+        dshHome: DSH_HOME,
+        runtimeDir: getRuntimeDir(),
+        killOrphanProcess: () => killProcessTree()
+      });
+      const ready = await restartWithCurrentConfig();
+      report.ready = ready;
+      report.port = currentPort;
+      report.url = 'http://127.0.0.1:' + currentPort;
+      return report;
+    },
+    'dsh:check-update'() {
+      runUpdateCheck(false);
+      return { ok: true };
     }
   }
-  return { ok: true };
-});
-
-ipcMain.handle('dsh:switch-engine', async (event, mode) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:switch-engine', mode);
-  if (mode !== 'win-native' && mode !== 'wsl2') {
-    throw new Error(`Unsupported engine mode: ${mode}`);
-  }
-  if (mode === 'wsl2' && process.platform !== 'win32') {
-    throw new Error('wsl2 engine is only available on Windows hosts');
-  }
-  currentEngine = mode;
-  await restartWithCurrentConfig();
-  return { engine: currentEngine };
-});
-
-ipcMain.handle('dsh:restart-safe-mode', async (event) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:restart-safe-mode', undefined);
-  isSafeMode = !isSafeMode;
-  await restartWithCurrentConfig();
-  return { safeMode: isSafeMode };
-});
-
-ipcMain.handle('dsh:register-context-menu', (event) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:register-context-menu', undefined);
-  const result = registerWindowsContextMenu();
-  return result.total > 0 && result.failed === 0;
-});
-
-ipcMain.handle('dsh:unregister-context-menu', (event) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:unregister-context-menu', undefined);
-  const result = unregisterWindowsContextMenu();
-  return result.total > 0 && result.failed === 0;
-});
-
-ipcMain.on('dsh:request-clipboard-paste', (event) => {
-  try {
-    assertTrustedSender(event);
-    assertIpcPayload('dsh:request-clipboard-paste', undefined);
-  } catch (err) {
-    console.warn(`[ipc] clipboard-paste rejected: ${err.message}`);
-    return;
-  }
-  clipboardBridge.feedClipboardIntoEditor();
-});
-
-ipcMain.handle('dsh:get-auto-start', (event) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:get-auto-start', undefined);
-  return getAutoStart(app);
-});
-
-ipcMain.handle('dsh:set-auto-start', (event, enable) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:set-auto-start', enable);
-  const result = setAutoStart(app, Boolean(enable));
-  if (mainWindow && mainWindow.webContents) {
-    mainWindow.webContents.send('dsh:auto-start-changed', result);
-  }
-  buildNativeAppMenu();
-  updateTrayMenu();
-  return result;
-});
-
-ipcMain.handle('dsh:convert-to-wsl-path', (event, windowsPath) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:convert-to-wsl-path', windowsPath);
-  return clipboardBridge.convertToWslMountPath(windowsPath);
-});
-
-ipcMain.handle('dsh:get-workspace-status', (event) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:get-workspace-status', undefined);
-  return {
-    isWorktree: targetWorkspaceIsWorktree,
-    worktreePath: activeWorktreeSession.worktreePath,
-    worktreeBranch: activeWorktreeSession.branchName,
-    engine: currentEngine
-  };
-});
-
-ipcMain.handle('dsh:run-self-repair', async (event) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:run-self-repair', undefined);
-  console.log('[self-repair] 触发自动检修与自愈...');
-  const report = runSelfRepair({
-    dshHome: DSH_HOME,
-    runtimeDir: getRuntimeDir(),
-    killOrphanProcess: () => killProcessTree()
-  });
-  const ready = await restartWithCurrentConfig();
-  report.ready = ready;
-  report.port = currentPort;
-  report.url = 'http://127.0.0.1:' + currentPort;
-  return report;
-});
-
-ipcMain.handle('dsh:check-update', (event) => {
-  assertTrustedSender(event);
-  assertIpcPayload('dsh:check-update', undefined);
-  runUpdateCheck(false);
-  return { ok: true };
 });
 
 app.whenReady().then(async () => {
