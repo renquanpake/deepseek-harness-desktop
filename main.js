@@ -29,7 +29,7 @@ const { isBackendHttp, isTrustedSender } = require('./lib/trusted-url');
 const { decideRestart, MAX_CRASH_RESTARTS } = require('./lib/backend-lifecycle');
 const { pickWorkspaceMode } = require('./lib/cli-workspace');
 const { registerWindowsContextMenu, unregisterWindowsContextMenu } = require('./lib/context-menu');
-const { runGit, runTaskkill, runTasklist, readWindowsProcessCommandLine } = require('./lib/secure-exec');
+const { runTaskkill } = require('./lib/secure-exec');
 const { isBackendReadyStatus } = require('./lib/readiness');
 const { createSingleFlight } = require('./lib/restart-guard');
 const { assertValid: assertIpcPayload } = require('./lib/ipc-schema');
@@ -44,6 +44,7 @@ const {
 const UPDATE_CHECK = require('./lib/update-check');
 const { createI18n } = require('./lib/i18n');
 const { createClipboardBridge } = require('./src/clipboard');
+const { createWorktreeManager } = require('./src/worktree');
 const {
   semverCompare,
   isNewer,
@@ -72,9 +73,6 @@ const LOCAL_RUNTIME_WATCHDOG_MS = 15000;
 const WATCHDOG_BACKEND_PROBE_MS = 5000;
 const WATCHDOG_LOAD_FAILURE_THRESHOLD = 2;
 const LOCAL_RUNTIME_BROKEN_WINDOW_MS = 6 * 60 * 60 * 1000;
-const WORKTREE_PROCESS_SCAN_TIMEOUT_MS = 4000;
-const GIT_WORKTREE_COMMAND_TIMEOUT_MS = 30000;
-const GIT_WORKTREE_ADD_TIMEOUT_MS = 180000;
 
 let PORTABLE_DATA_ROOT = null;
 let PORTABLE_APPDATA = null;
@@ -93,6 +91,14 @@ let authenticatedBackendUrl = null;
 let worktreeCloseDialogShowing = false;
 const activeWorktreeSession = { worktreePath: null, repoPath: null, branchName: null };
 let updateCheckInFlight = false;
+
+const worktreeManager = createWorktreeManager({
+  session: activeWorktreeSession,
+  isWindowsPlatform,
+  clearWorkspaceFlag: () => {
+    targetWorkspaceIsWorktree = false;
+  }
+});
 
 // app.getLocale() only has a reliable value after ready, so build the i18n singleton lazily on first use.
 function getI18n() {
@@ -425,7 +431,7 @@ function resolveWorkspaceRequest(argv) {
     return { dir: path.resolve(picked.value), worktreeSession: null };
   }
   const baseDir = path.resolve(picked.value);
-  const session = createIsolatedGitWorktree(baseDir);
+  const session = worktreeManager.createIsolatedGitWorktree(baseDir);
   return { dir: session.worktreePath, worktreeSession: session };
 }
 
@@ -436,113 +442,6 @@ function handleCliWorkspaceArgs(argv) {
   }
 }
 
-function createIsolatedGitWorktree(repoDir) {
-  try {
-    const stamp = Math.random().toString(36).substring(2, 7);
-    const baseName = path.basename(repoDir);
-    const parentDir = path.dirname(repoDir);
-    const worktreePath = path.join(parentDir, `${baseName}-wt-${stamp}`);
-    const branchName = `dsh/task-${stamp}`;
-    runGit(['worktree', 'add', worktreePath, '-b', branchName], {
-      cwd: repoDir,
-      stdio: 'ignore',
-      windowsHide: true,
-      timeout: GIT_WORKTREE_ADD_TIMEOUT_MS,
-      maxBuffer: 1024 * 1024
-    });
-    return { created: true, worktreePath, repoPath: repoDir, branchName };
-  } catch (err) {
-    console.warn('[git-worktree] Fallback to original dir:', err.message);
-    return { created: false, worktreePath: repoDir, repoPath: null, branchName: null };
-  }
-}
-
-function isProcessAlive(pid) {
-  const numericPid = Number(pid);
-  if (!Number.isFinite(numericPid) || numericPid <= 0) return false;
-  try {
-    process.kill(numericPid, 0);
-    return true;
-  } catch (err) {
-    return err.code === 'EPERM';
-  }
-}
-
-function findWindowsProcessesWithWorkingDir(worktreePath) {
-  const pids = new Set();
-  if (!isWindowsPlatform() || !worktreePath) return [];
-  try {
-    const output = runTasklist(
-      ['/V', '/FI', 'IMAGENAME eq node.exe', '/FO', 'CSV', '/NH'],
-      { encoding: 'utf8', windowsHide: true, timeout: WORKTREE_PROCESS_SCAN_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 }
-    );
-    const normalizedPath = worktreePath.toLowerCase().replace(/\s/g, '');
-    for (const line of output.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('"node.exe"')) continue;
-      const pidMatch = trimmed.match(/,\s*"(\d+)",/);
-      if (pidMatch && isProcessAlive(Number(pidMatch[1]))) {
-        pids.add(pidMatch[1]);
-      }
-    }
-    for (const pid of [...pids]) {
-      const commandLine = readWindowsProcessCommandLine(Number(pid));
-      if (!commandLine) continue;
-      if (commandLine.replace(/\s/g, '').toLowerCase().includes(normalizedPath)) {
-        try {
-          runTaskkill(Number(pid));
-          console.warn(`[git-worktree] 已结束工作区残留进程 PID ${pid}`);
-        } catch (killErr) {
-          console.warn(`[git-worktree] 结束残留进程失败 PID ${pid}: ${killErr.message}`);
-        }
-      }
-    }
-  } catch (err) {
-    console.warn(`[git-worktree] 残留进程扫描失败（继续回收）: ${err.message}`);
-  }
-}
-
-function removeActiveWorktree() {
-  const { worktreePath, repoPath, branchName } = activeWorktreeSession;
-  if (!worktreePath) return false;
-  findWindowsProcessesWithWorkingDir(worktreePath);
-  try {
-    runGit(['worktree', 'remove', worktreePath, '--force'], {
-      cwd: repoPath || worktreePath,
-      stdio: 'ignore',
-      windowsHide: true,
-      timeout: GIT_WORKTREE_COMMAND_TIMEOUT_MS,
-      maxBuffer: 1024 * 1024
-    });
-  } catch (err) {
-    console.warn(`[git-worktree] git worktree remove 失败，改为直接移除目录: ${err.message}`);
-    try {
-      fs.rmSync(worktreePath, { recursive: true, force: true });
-    } catch (cleanupErr) {
-      console.warn(`[git-worktree] 目录移除失败: ${cleanupErr.message}`);
-      return false;
-    }
-  }
-  if (repoPath && branchName) {
-    try {
-      runGit(['branch', '-D', branchName], {
-        cwd: repoPath,
-        stdio: 'ignore',
-        windowsHide: true,
-        timeout: GIT_WORKTREE_COMMAND_TIMEOUT_MS,
-        maxBuffer: 1024 * 1024
-      });
-      console.warn(`[git-worktree] 已删除临时分支 ${branchName}`);
-    } catch (branchErr) {
-      console.warn(`[git-worktree] 临时分支删除失败（可能未提交或已被占用）: ${branchErr.message}`);
-    }
-  }
-  activeWorktreeSession.worktreePath = null;
-  activeWorktreeSession.repoPath = null;
-  activeWorktreeSession.branchName = null;
-  targetWorkspaceIsWorktree = false;
-  return true;
-}
 
 async function handleWorktreeWindowClose() {
   if (worktreeCloseDialogShowing || !mainWindow) return;
@@ -563,7 +462,7 @@ async function handleWorktreeWindowClose() {
     if (response.response === 2) return;
     if (response.response === 1) {
       killProcessTree();
-      const removed = removeActiveWorktree();
+      const removed = worktreeManager.removeActiveWorktree();
       if (!removed && activeWorktreeSession.worktreePath) {
         console.warn('[git-worktree] Worktree 回收未完全成功，请手动检查磁盘目录。');
       }
@@ -1490,7 +1389,7 @@ function buildNativeAppMenu() {
               title: t('dialog.openWorktreeDir.title')
             });
             if (!res.canceled && res.filePaths[0]) {
-              const session = createIsolatedGitWorktree(res.filePaths[0]);
+              const session = worktreeManager.createIsolatedGitWorktree(res.filePaths[0]);
               switchWorkspace(session.worktreePath, session);
               if (mainWindow) {
                 mainWindow.setTitle(`DeepSeek Harness Studio — ${targetWorkspaceDir}`);
@@ -1882,7 +1781,7 @@ ipcMain.handle('dsh:create-worktree-dialog', async (event) => {
     title: t('dialog.openWorktreeDir.title')
   });
   if (!res.canceled && res.filePaths[0]) {
-    const session = createIsolatedGitWorktree(res.filePaths[0]);
+    const session = worktreeManager.createIsolatedGitWorktree(res.filePaths[0]);
     if (session.created) {
       switchWorkspace(session.worktreePath, session);
       await restartWithCurrentConfig();
