@@ -33,6 +33,7 @@ const { runTaskkill } = require('./lib/secure-exec');
 const { isBackendReadyStatus } = require('./lib/readiness');
 const { createSingleFlight } = require('./lib/restart-guard');
 const { registerIpcHandlers } = require('./src/ipc');
+const { createBackend } = require('./src/backend');
 const {
   APP_SCHEME,
   APP_HOST,
@@ -62,8 +63,6 @@ const {
 
 let mainWindow = null;
 let i18nInstance = null;
-let dshProcess = null;
-let crashCount = 0;
 let isQuitting = false;
 let currentPort = 3080;
 let currentEngine = 'win-native';
@@ -81,16 +80,8 @@ let PORTABLE_DATA_ROOT = null;
 let PORTABLE_APPDATA = null;
 let PORTABLE_LOCALAPPDATA = null;
 let PORTABLE_USERPROFILE = null;
-let useLocalRuntime = false;
 let forceBundledRuntime = false;
 let localRuntimeBrokenUntil = 0;
-let exitRestartSuppressedFor = null;
-let watchedRuntimeExitCode = null;
-let localRuntimeSpawnError = null;
-let watchdogTimer = null;
-let backendLoadFailures = 0;
-let isBackendReadyState = false;
-let authenticatedBackendUrl = null;
 let worktreeCloseDialogShowing = false;
 const activeWorktreeSession = { worktreePath: null, repoPath: null, branchName: null };
 
@@ -319,7 +310,7 @@ const ENABLE_APP_PROTOCOL = /^(1|true|yes)$/i.test(String(process.env.DSH_ENABLE
 registerAppSchemePrivileges(protocol);
 
 function backendProtocolOrigin() {
-  const targetUrl = authenticatedBackendUrl || `http://127.0.0.1:${currentPort}`;
+  const targetUrl = backend.getTargetUrl();
   try {
     return new URL(targetUrl).origin;
   } catch {
@@ -426,369 +417,68 @@ async function handleWorktreeWindowClose() {
   }
 }
 
-function killProcessTree() {
-  isBackendReadyState = false;
-  if (!dshProcess || !dshProcess.pid) return;
-  const proc = dshProcess;
-  proc.killedByUs = true;
-  const pid = proc.pid;
-  dshProcess = null;
-  try {
-    if (process.platform === 'win32') {
-      runTaskkill(pid);
-    } else {
-      process.kill(-pid, 'SIGKILL');
+const backend = createBackend({
+  spawn,
+  http,
+  fs,
+  path,
+  dialog,
+  t,
+  toWslPath,
+  cleanStaleLocks,
+  getDshHome: () => DSH_HOME,
+  getLocalRuntimeDir: () => LOCAL_RUNTIME_DIR,
+  getPort: () => currentPort,
+  getEngine: () => currentEngine,
+  isSafeMode: () => isSafeMode,
+  isQuitting: () => isQuitting,
+  getWorkspaceDir: () => targetWorkspaceDir,
+  getMainWindow: () => mainWindow,
+  getRuntimeDir,
+  getBundledNodeExe,
+  buildBackendEnv,
+  currentRegistryUrl,
+  cleanupOldBrokenRuntimeDirs: (keep) => cleanupOldBrokenRuntimeDirs(keep),
+  getLocalDshVersion,
+  hydratePresetPlugins: () => hydratePresetPluginsIfNeeded(),
+  setForceBundledRuntime: (value) => {
+    forceBundledRuntime = value;
+  },
+  setLocalRuntimeBrokenUntil: (timestamp) => {
+    localRuntimeBrokenUntil = timestamp;
+  },
+  sendRuntimeLog: (line) => {
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('dsh:runtime-log', line);
     }
-  } catch {}
-}
-
-function clearLocalRuntimeWatchdog() {
-  if (watchdogTimer) {
-    clearTimeout(watchdogTimer);
-    watchdogTimer = null;
-  }
-}
-
-function promoteLocalRuntimeSession(reason) {
-  clearLocalRuntimeWatchdog();
-  useLocalRuntime = false;
-  console.log(`[dsh-watchdog] 热更内核通过启动看门狗${reason ? `（${reason}）` : ''}，交由常规崩溃重启策略接管。`);
-}
-
-function armLocalRuntimeWatchdog(proc) {
-  if (!useLocalRuntime || !proc || !proc.pid) return;
-  clearLocalRuntimeWatchdog();
-  console.log(`[dsh-watchdog] 已启用 ${LOCAL_RUNTIME_WATCHDOG_MS}ms 启动看门狗（local-runtime 热更内核）。`);
-  watchdogTimer = setTimeout(() => {
-    watchdogTimer = null;
-    verifyLocalRuntimeHealth().catch((err) => {
-      console.warn(`[dsh-watchdog] 健康校验异常: ${err.message}`);
-    });
-  }, LOCAL_RUNTIME_WATCHDOG_MS);
-}
-
-async function verifyLocalRuntimeHealth() {
-  if (isQuitting) return;
-  if (!dshProcess) {
-    if (localRuntimeSpawnError) {
-      await breakLocalRuntimeCircuit(`后端子进程启动失败: ${localRuntimeSpawnError.message}`);
-    } else if (watchedRuntimeExitCode === null) {
-      promoteLocalRuntimeSession('进程已按预期结束');
-    } else {
-      await breakLocalRuntimeCircuit(`15 秒内后端子进程异常退出 (code ${watchedRuntimeExitCode})`);
-    }
-    return;
-  }
-  if (await waitForBackendReady(WATCHDOG_BACKEND_PROBE_MS)) {
-    promoteLocalRuntimeSession('后端服务已就绪');
-    return;
-  }
-  if (backendLoadFailures >= WATCHDOG_LOAD_FAILURE_THRESHOLD) {
-    await breakLocalRuntimeCircuit('15 秒内后端服务未就绪，且窗口已连续加载失败');
-    return;
-  }
-  promoteLocalRuntimeSession('后端仍在启动中，放行观察');
-}
-
-async function breakLocalRuntimeCircuit(reason) {
-  if (isQuitting || !useLocalRuntime) return;
-  forceBundledRuntime = true;
-  localRuntimeBrokenUntil = Date.now() + LOCAL_RUNTIME_BROKEN_WINDOW_MS;
-  clearLocalRuntimeWatchdog();
-  useLocalRuntime = false;
-  let quarantinedTo = null;
-  try {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const brokenPath = `${LOCAL_RUNTIME_DIR}.broken.${timestamp}`;
-    fs.renameSync(LOCAL_RUNTIME_DIR, brokenPath);
-    quarantinedTo = brokenPath;
-    cleanupOldBrokenRuntimeDirs(2);
-  } catch (err) {
-    try {
-      const brokenVersion = getLocalDshVersion() || 'unknown';
-      fs.mkdirSync(LOCAL_RUNTIME_DIR, { recursive: true });
-      fs.writeFileSync(
-        path.join(LOCAL_RUNTIME_DIR, '.broken-marker.json'),
-        JSON.stringify(
-          {
-            brokenVersion,
-            reason,
-            at: new Date().toISOString(),
-            detail: err.message
-          },
-          null,
-          2
-        )
-      );
-    } catch (markerErr) {
-      console.warn(`[dsh-watchdog] 写入回退标志文件失败: ${markerErr.message}`);
-    }
-  }
-  console.warn(`[dsh-watchdog] 触发熔断: ${reason}${quarantinedTo ? `，已隔离至 ${quarantinedTo}` : '，已写入回退标志文件'}`);
-  exitRestartSuppressedFor = dshProcess;
-  killProcessTree();
-  crashCount = 0;
-  startDshBackend(true);
-  const ready = await waitForBackendReady();
-  await showLocalRuntimeFallbackNotice(reason, ready);
-}
-
-async function showLocalRuntimeFallbackNotice(reason, ready) {
-  if (!mainWindow) return;
-  if (ready) {
-    await dialog.showMessageBox(mainWindow, {
-      type: 'warning',
-      title: t('dialog.rollback.doneTitle'),
-      message: t('dialog.rollback.doneMessage'),
-      detail: t('dialog.rollback.doneDetail', { reason }),
-      buttons: [t('dialog.common.ok')]
-    });
-    return;
-  }
-  await dialog.showMessageBox(mainWindow, {
-    type: 'error',
-    title: t('dialog.rollback.notReadyTitle'),
-    message: t('dialog.rollback.notReadyMessage'),
-    detail: t('dialog.rollback.notReadyDetail', { reason }),
-    buttons: [t('dialog.common.ok')]
-  });
-}
-
-function describeBackendUrl(value) {
-  try {
-    return new URL(value).origin;
-  } catch {
-    return '[已脱敏]';
-  }
-}
-
-function startDshBackend(resetCrash = true) {
-  killProcessTree();
-  cleanStaleLocks(DSH_HOME);
-  hydratePresetPluginsIfNeeded();
-  if (resetCrash) {
-    crashCount = 0;
-  }
-  const runtimeDir = getRuntimeDir();
-  const args = ['web', '--no-open', '--port', String(currentPort)];
-  if (isSafeMode) {
-    args.push('--safe-mode');
-  }
-  const env = buildBackendEnv();
-  const isWindows = process.platform === 'win32';
-  watchedRuntimeExitCode = null;
-  localRuntimeSpawnError = null;
-  useLocalRuntime = false;
-  if (currentEngine === 'wsl2' && isWindows) {
-    const rawWslWorkspace = toWslPath(targetWorkspaceDir);
-    const cleanWslWorkspace = rawWslWorkspace.replace(/^["']|["']$/g, '');
-    const safeFlag = isSafeMode ? '--safe-mode' : '';
-    const safeWslWorkspace = "'" + cleanWslWorkspace.replace(/'/g, "'\\''") + "'";
-    const wslCmd = `cd ${safeWslWorkspace} && npx --yes @deepseek-ai/dsh web --no-open --port ${currentPort} ${safeFlag}`;
-    dshProcess = spawn('wsl.exe', ['--', 'bash', '-lc', wslCmd], {
-      stdio: 'pipe',
-      windowsHide: true,
-      env: {
-        ...process.env,
-        NPM_CONFIG_REGISTRY: currentRegistryUrl(),
-        COREPACK_NPM_REGISTRY: currentRegistryUrl(),
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
-      }
-    });
-  } else {
-    const dshCliJs = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'bin', 'dsh.mjs');
-    const dshCmd = path.join(
-      runtimeDir,
-      'node_modules',
-      '.bin',
-      isWindows ? 'dsh.cmd' : 'dsh'
-    );
-    const bundledNode = getBundledNodeExe();
-    const commonSpawnOpts = {
-      cwd: targetWorkspaceDir,
-      env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
-      stdio: 'pipe',
-      windowsHide: true,
-      detached: !isWindows
-    };
-    if (bundledNode && fs.existsSync(dshCliJs)) {
-      dshProcess = spawn(bundledNode, [dshCliJs, ...args], commonSpawnOpts);
-      useLocalRuntime = path.resolve(runtimeDir) === path.resolve(LOCAL_RUNTIME_DIR);
-    } else if (fs.existsSync(dshCmd)) {
-      dshProcess = spawn(dshCmd, args, {
-        ...commonSpawnOpts,
-        shell: isWindows
-      });
-      useLocalRuntime = path.resolve(runtimeDir) === path.resolve(LOCAL_RUNTIME_DIR);
-    } else {
-      dshProcess = null;
-      const missingMessage = [
-        '[dsh-backend] 未找到可用的 DSH 运行时，已停止启动（不再通过 npx 联网安装）。',
-        `runtimeDir: ${runtimeDir}`,
-        '请重新安装应用，或先运行 npm run runtime:prepare 生成运行时后重试。'
-      ].join('\n');
-      console.error(missingMessage);
-      if (!isQuitting && mainWindow) {
-        dialog.showErrorBox(t('error.runtimeMissing'), missingMessage);
-      }
-      return false;
-    }
-  }
-  const proc = dshProcess;
-  armLocalRuntimeWatchdog(proc);
-
-  let stdoutAccumulator = '';
-  if (proc.stdout) {
-    proc.stdout.on('data', (chunk) => {
-      const line = String(chunk);
-      const logLine = line.replace(
-        /dsh web:\s*(https?:\/\/[^\s()]+)/gi,
-        (_, url) => `dsh web: ${describeBackendUrl(url)}`
-      );
-      console.log(`[dsh] ${logLine}`);
-      stdoutAccumulator += line;
-      const match = stdoutAccumulator.match(/dsh web:\s*(https?:\/\/[^\s()]+)(?:[\r\n]|\s+\()/i);
-      if (match && match[1]) {
-        authenticatedBackendUrl = match[1].trim();
-        console.log(`[dsh-auth] 成功捕获启动认证 URL: ${describeBackendUrl(authenticatedBackendUrl)}`);
-      }
-      if (stdoutAccumulator.length > 20000) {
-        stdoutAccumulator = stdoutAccumulator.slice(-5000);
-      }
-      if (mainWindow && mainWindow.webContents) {
-        mainWindow.webContents.send('dsh:runtime-log', line);
-      }
-    });
-  }
-  if (proc.stderr) {
-    proc.stderr.on('data', (chunk) => {
-      const line = String(chunk);
-      console.warn(`[dsh] ${line}`);
-      if (mainWindow && mainWindow.webContents) {
-        mainWindow.webContents.send('dsh:runtime-log', line);
-      }
-    });
-  }
-
-  proc.on('error', (err) => {
-    console.error(`[dsh-backend] Failed to spawn backend: ${err.message}`);
-    if (useLocalRuntime) {
-      localRuntimeSpawnError = err;
-    }
-    if (dshProcess === proc) {
-      dshProcess = null;
-    }
-    if (!isQuitting && mainWindow) {
-      dialog.showErrorBox(t('error.backendStartFailed'), String(err.message || err));
-    }
-  });
-
-  proc.on('exit', (code) => {
-    if (dshProcess === proc) {
-      dshProcess = null;
-    }
-    if (exitRestartSuppressedFor === proc) {
-      exitRestartSuppressedFor = null;
-      console.warn(`[dsh-watchdog] 熔断接管的旧进程已退出 (code ${code})，跳过自动重启。`);
-      return;
-    }
-    if (useLocalRuntime && !proc.killedByUs && !isQuitting && !localRuntimeSpawnError) {
-      watchedRuntimeExitCode = code;
-    }
-    const decision = decideRestart({
-      isQuitting,
-      killedByUs: !!proc.killedByUs,
-      code,
-      failures: crashCount
-    });
-    crashCount = decision.failures;
-    if (decision.action === 'give-up') {
-      const msg = `[dsh-watchdog] Backend exited with code ${code} ${MAX_CRASH_RESTARTS + 1} times in a row. Auto-restart disabled — use the Engine menu to retry.`;
-      console.error(msg);
-      if (mainWindow) {
-        dialog.showMessageBox(mainWindow, {
-          type: 'error',
-          title: t('dialog.common.dsStudioTitle'),
-          message: t('error.backendCrashLoop')
-        });
-      }
-    } else if (decision.action === 'restart') {
-      if (useLocalRuntime) {
-        console.warn(
-          `[dsh-watchdog] 热更内核启动期内异常退出 (code ${code})，交由 ${LOCAL_RUNTIME_WATCHDOG_MS}ms 看门狗统一裁决。`
-        );
-        return;
-      }
-      console.warn(
-        `[dsh-watchdog] Backend exited with code ${code}, re-attempting in ${decision.delayMs}ms (streak ${decision.failures}).`
-      );
-      setTimeout(() => {
-        if (!isQuitting) startDshBackend(false);
-      }, decision.delayMs);
-    }
-  });
-  return true;
-}
-
-function waitForBackendReady(timeoutMs = 30000) {
-  const start = Date.now();
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = (value) => {
-      if (!done) {
-        done = true;
-        resolve(value);
-      }
-    };
-    const check = () => {
-      if (done) return;
-      const req = http.get(`http://127.0.0.1:${currentPort}`, (res) => {
-        const statusCode = res.statusCode;
-        res.resume();
-        if (isBackendReadyStatus(statusCode)) {
-          finish(true);
-        } else if (Date.now() - start > timeoutMs) {
-          finish(false);
-        } else {
-          setTimeout(check, 400);
-        }
-      });
-      req.on('error', () => {
-        if (Date.now() - start > timeoutMs) {
-          finish(false);
-        } else {
-          setTimeout(check, 400);
-        }
-      });
-      req.setTimeout(5000, () => {
-        req.destroy();
-      });
-      req.end();
-    };
-    check();
-  });
-}
+  },
+  watchdogMs: LOCAL_RUNTIME_WATCHDOG_MS,
+  probeMs: WATCHDOG_BACKEND_PROBE_MS,
+  loadFailureThreshold: WATCHDOG_LOAD_FAILURE_THRESHOLD,
+  brokenWindowMs: LOCAL_RUNTIME_BROKEN_WINDOW_MS
+});
+const { startDshBackend, waitForBackendReady, killProcessTree } = backend;
 
 // findAvailablePort imported from ./lib/env-utils
 
 async function performRestartWithCurrentConfig() {
-  isBackendReadyState = false;
-  authenticatedBackendUrl = null;
+  backend.markReady(false);
+  backend.clearAuthUrl();
   currentPort = await findAvailablePort(currentPort || 3080);
   if (!startDshBackend()) {
-    isBackendReadyState = false;
+    backend.markReady(false);
     return false;
   }
   const ready = await waitForBackendReady();
-  isBackendReadyState = Boolean(ready);
+  backend.markReady(ready);
   if (ready) installAppProtocolHandler();
-  if (ready && !authenticatedBackendUrl) {
+  if (ready && !backend.getAuthUrl()) {
     const deadline = Date.now() + 1500;
-    while (!authenticatedBackendUrl && Date.now() < deadline) {
+    while (!backend.getAuthUrl() && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 100));
     }
   }
-  const targetUrl = authenticatedBackendUrl || `http://127.0.0.1:${currentPort}`;
+  const targetUrl = backend.getTargetUrl();
   if (mainWindow && !mainWindow.isDestroyed()) {
     if (ready) {
       mainWindow.loadURL(targetUrl);
@@ -854,7 +544,7 @@ const updateFlow = createUpdateFlow({
     killProcessTree,
     startDshBackend,
     restartWithCurrentConfig,
-    clearLocalRuntimeWatchdog,
+    clearLocalRuntimeWatchdog: () => backend.clearWatchdog(),
     setForceBundledRuntime: (value) => {
       forceBundledRuntime = value;
     },
@@ -1002,11 +692,10 @@ function createMainWindow() {
   });
   mainWindow.webContents.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL) => {
     if (validatedURL === 'about:blank' || (validatedURL && validatedURL.endsWith('splash.html'))) return;
-    backendLoadFailures += 1;
-    console.warn(`[dsh-watchdog] 后端页面加载失败 code=${errorCode} ${errorDescription}（连续 ${backendLoadFailures} 次）`);
+    backend.noteLoadFailure(errorCode, errorDescription);
   });
   mainWindow.webContents.on('dom-ready', () => {
-    backendLoadFailures = 0;
+    backend.resetLoadFailures();
   });
   mainWindow.on('close', (event) => {
     if (isQuitting || !isWindowsPlatform()) return;
@@ -1061,8 +750,8 @@ registerIpcHandlers({
     },
     'dsh:get-backend-status'() {
       return {
-        ready: Boolean(isBackendReadyState && dshProcess),
-        url: authenticatedBackendUrl || `http://127.0.0.1:${currentPort}`,
+        ready: Boolean(backend.isReady() && backend.isRunning()),
+        url: backend.getTargetUrl(),
         port: currentPort,
         engine: currentEngine,
         workspaceDir: targetWorkspaceDir
@@ -1181,7 +870,7 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
-  clearLocalRuntimeWatchdog();
+  backend.clearWatchdog();
   globalShortcut.unregisterAll();
   killProcessTree();
 });

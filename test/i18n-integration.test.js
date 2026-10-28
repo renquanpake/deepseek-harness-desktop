@@ -12,7 +12,8 @@ const MAIN_JS = path.join(__dirname, '..', 'main.js');
 const I18N_SOURCES = [
   MAIN_JS,
   path.join(__dirname, '..', 'src', 'ui-menus.js'),
-  path.join(__dirname, '..', 'src', 'update-flow.js')
+  path.join(__dirname, '..', 'src', 'update-flow.js'),
+  path.join(__dirname, '..', 'src', 'backend.js')
 ];
 
 function readLocale(name) {
