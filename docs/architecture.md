@@ -16,7 +16,21 @@
 
 ### 2.1 结构与加载方式
 
-当前 `main.js` 是单体组合根，窗口创建、后端生命周期、IPC、菜单、托盘、更新、剪贴板等逻辑集中在同一文件。`createMainWindow` 位于 `main.js`，其关键行为如下：
+`main.js` 是组合根（portable 路径引导、`dsh-app` 协议安装、窗口创建、`whenReady` 编排），其余能力已按职责拆分到 `src/` 与 `lib/`：
+
+| 模块 | 职责 |
+| --- | --- |
+| `src/backend.js` | 后端子进程启动/终止、崩溃重启决策接线、local-runtime 启动看门狗与熔断 |
+| `src/ui-menus.js` | 托盘、原生应用菜单、自修复入口 |
+| `src/update-flow.js` | 更新检查编排、回退出厂运行时、旧损坏目录清理 |
+| `src/ipc.js` | 全部 IPC handler 集中注册（含无参通道白名单） |
+| `src/worktree.js` | git worktree 隔离会话管理 |
+| `src/runtime-layout.js` | runtime 目录布局与版本探测 |
+| `src/preset-plugins.js` | 预置插件水合 |
+| `src/clipboard.js` | 剪贴板桥接 |
+| `lib/context-menu.js`、`lib/update-check.js` | 右键菜单注册、更新检测纯逻辑 |
+
+拆分模块统一采用依赖注入工厂（`createXxx(deps)`），Electron 与 main 状态经 getter/回调注入，行为与单体版本等价。`createMainWindow` 位于 `main.js`，其关键行为如下：
 
 - `BrowserWindow` 使用 `preload.js`，并开启 `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`、`webviewTag: false`。
 - 启动页默认 `loadFile('splash.html')`；设置 `DSH_ENABLE_APP_PROTOCOL=true` 时改用 `dsh-app://app/splash.html`。
@@ -29,14 +43,18 @@
 
 ```mermaid
 graph TD
-  MAIN["main.js 单体"] --> WIN["createMainWindow"]
+  MAIN["main.js 组合根"] --> WIN["createMainWindow"]
+  MAIN --> BE["src/backend.js"]
+  MAIN --> UI["src/ui-menus.js"]
+  MAIN --> UP["src/update-flow.js"]
+  MAIN --> IPC["src/ipc.js"]
+  IPC --> SCHEMA["lib/ipc-schema.js 契约校验"]
   WIN --> PREFS["webPreferences: contextIsolation true, sandbox true, nodeIntegration false"]
   WIN --> SPLASH["loadFile splash.html"]
   WIN --> LOAD["loadURL: authenticatedBackendUrl 或 http://127.0.0.1:port"]
   LOAD --> BACKEND["DSh 后端进程"]
   PRELOAD["preload.js: 22 个桥接方法"] --> MAIN
   BACKEND --> RENDER["Renderer 直接承载后端页面"]
-  IPC["18 个 ipcMain 通道"] --> MAIN
 ```
 
 ### 2.2 preload 桥接面
