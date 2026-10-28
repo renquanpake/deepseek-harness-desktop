@@ -48,6 +48,7 @@ const { createWorktreeManager } = require('./src/worktree');
 const { createRuntimeLayout } = require('./src/runtime-layout');
 const { createPresetPlugins } = require('./src/preset-plugins');
 const { createUpdateFlow } = require('./src/update-flow');
+const { createUiMenus } = require('./src/ui-menus');
 const {
   semverCompare,
   isNewer,
@@ -60,7 +61,6 @@ const {
 
 
 let mainWindow = null;
-let tray = null;
 let i18nInstance = null;
 let dshProcess = null;
 let crashCount = 0;
@@ -874,315 +874,56 @@ const cleanupOldBrokenRuntimeDirs = updateFlow.cleanupOldBrokenRuntimeDirs;
 const isPortable = updateFlow.isPortable;
 
 
-function getTrayIconPath() {
-  const candidates = [
-    path.join(__dirname, 'build', 'icon.png'),
-    path.join(process.resourcesPath, 'icon.png'),
-    path.join(process.resourcesPath, 'build', 'icon.png')
-  ];
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return p;
-    } catch {}
+const uiMenus = createUiMenus({
+  app,
+  dialog,
+  shell,
+  Menu,
+  Tray,
+  nativeImage,
+  t,
+  getMainWindow: () => mainWindow,
+  isWindowsPlatform,
+  getState: () => ({ port: currentPort, engine: currentEngine, safeMode: isSafeMode }),
+  setEngine: (value) => {
+    currentEngine = value;
+  },
+  setSafeMode: (value) => {
+    isSafeMode = value;
+  },
+  setQuitting: () => {
+    isQuitting = true;
+  },
+  actions: {
+    getAutoStart: () => getAutoStart(app),
+    setAutoStart: (enable) => setAutoStart(app, enable),
+    runUpdateCheck,
+    revertToFactoryRuntime,
+    restartWithCurrentConfig,
+    createWorktreeSession: (dir) => worktreeManager.createIsolatedGitWorktree(dir),
+    switchWorkspace,
+    pasteClipboard: () => clipboardBridge.feedClipboardIntoEditor(),
+    hydratePresetPlugins: (force) => hydratePresetPluginsIfNeeded(force),
+    async runSelfRepairSession() {
+      const report = runSelfRepair({
+        dshHome: DSH_HOME,
+        runtimeDir: getRuntimeDir(),
+        killOrphanProcess: () => killProcessTree()
+      });
+      const ready = await restartWithCurrentConfig();
+      return { report, ready };
+    },
+    registerContextMenu: () => registerWindowsContextMenu(),
+    unregisterContextMenu: () => unregisterWindowsContextMenu(),
+    getCurrentDshVersion,
+    getShellVersion,
+    getDshHome: () => DSH_HOME,
+    composeWindowTitle: () => `DeepSeek Harness Studio — ${targetWorkspaceDir}`
   }
-  return null;
-}
-
-function updateTrayMenu() {
-  if (!tray) return;
-  try {
-    const isAuto = getAutoStart(app);
-    const menu = Menu.buildFromTemplate([
-      {
-        label: t('tray.showWindow'),
-        click: () => {
-          if (mainWindow) {
-            mainWindow.show();
-            mainWindow.focus();
-          }
-        }
-      },
-      {
-        label: t('tray.checkUpdates'),
-        click: () => runUpdateCheck(false)
-      },
-      {
-        label: t('tray.autoStart'),
-        type: 'checkbox',
-        checked: isAuto,
-        click: (item) => {
-          const result = setAutoStart(app, item.checked);
-          if (mainWindow && mainWindow.webContents) {
-            mainWindow.webContents.send('dsh:auto-start-changed', result);
-          }
-          buildNativeAppMenu();
-          updateTrayMenu();
-        }
-      },
-      { type: 'separator' },
-      {
-        label: t('tray.quit'),
-        click: () => {
-          isQuitting = true;
-          app.quit();
-        }
-      }
-    ]);
-    tray.setContextMenu(menu);
-  } catch (err) {
-    console.warn(`[tray] 更新托盘菜单异常: ${err.message}`);
-  }
-}
-
+});
+const { buildNativeAppMenu, updateTrayMenu, getTray } = uiMenus;
 function createTray() {
-  if (tray) return;
-  const iconPath = getTrayIconPath();
-  if (!iconPath) {
-    console.warn('[tray] No tray icon found, skipping tray creation');
-    return;
-  }
-  try {
-    const icon = nativeImage.createFromPath(iconPath);
-    if (icon.isEmpty()) {
-      console.warn('[tray] Tray icon is empty, skipping tray creation');
-      return;
-    }
-    tray = new Tray(icon);
-    updateTrayMenu();
-    tray.on('click', () => {
-      if (mainWindow) {
-        mainWindow.show();
-        mainWindow.focus();
-      }
-    });
-  } catch (err) {
-    console.warn(`[tray] Failed to create tray: ${err.message}`);
-  }
-}
-
-function buildNativeAppMenu() {
-  const template = [
-    {
-      label: t('menu.studio.title'),
-      submenu: [
-        {
-          label: t('menu.studio.newWorktree'),
-          click: async () => {
-            const res = await dialog.showOpenDialog(mainWindow, {
-              properties: ['openDirectory'],
-              title: t('dialog.openWorktreeDir.title')
-            });
-            if (!res.canceled && res.filePaths[0]) {
-              const session = worktreeManager.createIsolatedGitWorktree(res.filePaths[0]);
-              switchWorkspace(session.worktreePath, session);
-              if (mainWindow) {
-                mainWindow.setTitle(`DeepSeek Harness Studio — ${targetWorkspaceDir}`);
-              }
-              await restartWithCurrentConfig();
-            }
-          }
-        },
-        {
-          label: t('menu.studio.pasteClipboard'),
-          accelerator: 'Alt+Shift+V',
-          click: () => {
-            clipboardBridge.feedClipboardIntoEditor();
-          }
-        },
-        { type: 'separator' },
-        {
-          label: t('menu.studio.alwaysOnTop'),
-          type: 'checkbox',
-          checked: mainWindow ? mainWindow.isAlwaysOnTop() : false,
-          click: (item) => {
-            if (mainWindow) mainWindow.setAlwaysOnTop(item.checked);
-          }
-        },
-        {
-          label: t('menu.studio.autoStart'),
-          type: 'checkbox',
-          checked: getAutoStart(app),
-          click: (item) => {
-            const result = setAutoStart(app, item.checked);
-            if (mainWindow && mainWindow.webContents) {
-              mainWindow.webContents.send('dsh:auto-start-changed', result);
-            }
-            buildNativeAppMenu();
-            updateTrayMenu();
-          }
-        },
-        { type: 'separator' },
-        {
-          label: t('menu.app.quit'),
-          click: () => {
-            isQuitting = true;
-            app.quit();
-          }
-        }
-      ]
-    },
-    {
-      label: t('menu.engine.title'),
-      submenu: [
-        {
-          label: (() => {
-            const core = getCurrentDshVersion();
-            const sourceLabel = core.source === 'hot-update'
-              ? t('menu.engine.sourceHotUpdate')
-              : t('menu.engine.sourceFactory');
-            return t('menu.engine.status', { shell: getShellVersion(), core: core.version, source: sourceLabel });
-          })(),
-          enabled: false
-        },
-        { type: 'separator' },
-        {
-          label: t('menu.engine.selfRepair'),
-          click: async () => {
-            const report = runSelfRepair({
-              dshHome: DSH_HOME,
-              runtimeDir: getRuntimeDir(),
-              killOrphanProcess: () => killProcessTree()
-            });
-            const ready = await restartWithCurrentConfig();
-            if (mainWindow) {
-              const actionList = report.actions && report.actions.length
-                ? report.actions.map((a) => `• ${a}`).join('\n')
-                : t('dialog.selfRepair.noActions');
-              dialog.showMessageBox(mainWindow, {
-                type: 'info',
-                title: t('dialog.selfRepair.title'),
-                message: ready ? t('dialog.selfRepair.readyMessage') : t('dialog.selfRepair.pendingMessage'),
-                detail: t('dialog.selfRepair.detail', { actions: actionList, port: currentPort, engine: currentEngine })
-              });
-            }
-          }
-        },
-        {
-          label: t('menu.engine.checkUpdates'),
-          click: () => {
-            runUpdateCheck(false);
-          }
-        },
-        {
-          label: t('menu.engine.revertFactory'),
-          click: () => {
-            revertToFactoryRuntime();
-          }
-        },
-        { type: 'separator' },
-        {
-          label: t('menu.engine.winNative'),
-          type: 'radio',
-          checked: currentEngine === 'win-native',
-          click: async () => {
-            currentEngine = 'win-native';
-            await restartWithCurrentConfig();
-          }
-        },
-        {
-          label: t('menu.engine.wsl2'),
-          type: 'radio',
-          checked: currentEngine === 'wsl2',
-          click: async () => {
-            if (!isWindowsPlatform()) {
-              dialog.showMessageBox(mainWindow, {
-                type: 'warning',
-                title: t('dialog.common.dsStudioTitle'),
-                message: t('dialog.wsl2Unavailable.message')
-              });
-              currentEngine = 'win-native';
-              return;
-            }
-            currentEngine = 'wsl2';
-            await restartWithCurrentConfig();
-          }
-        },
-        { type: 'separator' },
-        {
-          label: t('menu.engine.safeMode'),
-          type: 'checkbox',
-          checked: isSafeMode,
-          click: async (item) => {
-            isSafeMode = item.checked;
-            await restartWithCurrentConfig();
-          }
-        },
-        {
-          label: t('menu.engine.restorePresets'),
-          click: async () => {
-            hydratePresetPluginsIfNeeded(true);
-            await restartWithCurrentConfig();
-            if (mainWindow) {
-              dialog.showMessageBox(mainWindow, {
-                type: 'info',
-                title: t('dialog.presetReset.title'),
-                message: t('dialog.presetReset.message')
-              });
-            }
-          }
-        }
-      ]
-    },
-    {
-      label: t('menu.system.title'),
-      submenu: [
-        {
-          label: t('menu.system.registerContextMenu'),
-          click: () => {
-            const result = registerWindowsContextMenu();
-            if (result.total === 0) {
-              dialog.showMessageBox(mainWindow, {
-                type: 'warning',
-                title: t('dialog.contextMenu.title'),
-                message: t('dialog.contextMenu.registerUnavailable')
-              });
-              return;
-            }
-            const ok = result.failed === 0;
-            dialog.showMessageBox(mainWindow, {
-              type: ok ? 'info' : 'warning',
-              title: t('dialog.contextMenu.title'),
-              message: ok
-                ? t('dialog.contextMenu.registerSuccess', { ok: result.ok, total: result.total })
-                : t('dialog.contextMenu.registerPartial', { ok: result.ok, total: result.total, failed: result.failed })
-            });
-          }
-        },
-        {
-          label: t('menu.system.unregisterContextMenu'),
-          click: () => {
-            const result = unregisterWindowsContextMenu();
-            if (result.total === 0) {
-              dialog.showMessageBox(mainWindow, {
-                type: 'warning',
-                title: t('dialog.contextMenu.title'),
-                message: t('dialog.contextMenu.unregisterUnavailable')
-              });
-              return;
-            }
-            dialog.showMessageBox(mainWindow, {
-              type: 'info',
-              title: t('dialog.contextMenu.title'),
-              message: t('dialog.contextMenu.unregisterResult', { total: result.total, ok: result.ok, failed: result.failed })
-            });
-          }
-        },
-        { type: 'separator' },
-        {
-          label: t('menu.system.openDataDir'),
-          click: () => shell.openPath(DSH_HOME)
-        },
-        {
-          label: t('menu.system.openDevTools'),
-          accelerator: 'F12',
-          click: () => {
-            if (mainWindow) mainWindow.webContents.toggleDevTools();
-          }
-        }
-      ]
-    }
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  uiMenus.createTray(__dirname);
 }
 
 function isWindowsPlatform() {
@@ -1269,7 +1010,7 @@ function createMainWindow() {
   });
   mainWindow.on('close', (event) => {
     if (isQuitting || !isWindowsPlatform()) return;
-    if (!tray) {
+    if (!getTray()) {
       isQuitting = true;
       app.quit();
       return;

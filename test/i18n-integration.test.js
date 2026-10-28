@@ -9,6 +9,11 @@ const { createI18n } = require('../lib/i18n');
 
 const LOCALES_DIR = path.join(__dirname, '..', 'locales');
 const MAIN_JS = path.join(__dirname, '..', 'main.js');
+const I18N_SOURCES = [
+  MAIN_JS,
+  path.join(__dirname, '..', 'src', 'ui-menus.js'),
+  path.join(__dirname, '..', 'src', 'update-flow.js')
+];
 
 function readLocale(name) {
   return JSON.parse(fs.readFileSync(path.join(LOCALES_DIR, `${name}.json`), 'utf8'));
@@ -24,12 +29,15 @@ function lookup(data, key) {
 }
 
 function collectKeys() {
-  const source = fs.readFileSync(MAIN_JS, 'utf8');
   const keys = new Set();
   const pattern = /\bt\('([^']+)'/g;
-  let match;
-  while ((match = pattern.exec(source)) !== null) {
-    keys.add(match[1]);
+  for (const file of I18N_SOURCES) {
+    const source = fs.readFileSync(file, 'utf8');
+    let match;
+    while ((match = pattern.exec(source)) !== null) {
+      keys.add(match[1]);
+    }
+    pattern.lastIndex = 0;
   }
   return keys;
 }
