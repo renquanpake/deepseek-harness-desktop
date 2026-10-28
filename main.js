@@ -45,6 +45,7 @@ const UPDATE_CHECK = require('./lib/update-check');
 const { createI18n } = require('./lib/i18n');
 const { createClipboardBridge } = require('./src/clipboard');
 const { createWorktreeManager } = require('./src/worktree');
+const { createRuntimeLayout } = require('./src/runtime-layout');
 const {
   semverCompare,
   isNewer,
@@ -221,29 +222,21 @@ if (!gotLock) {
 const DSH_HOME = resolveDshHome();
 const LOCAL_RUNTIME_DIR = path.join(DSH_HOME, 'local-runtime');
 
-function getBundledRuntimeDir() {
-  const unpackedPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'dsh-runtime');
-  if (fs.existsSync(unpackedPath)) return unpackedPath;
-  const extraResPath = path.join(process.resourcesPath, 'dsh-runtime');
-  if (fs.existsSync(extraResPath)) return extraResPath;
-  return path.join(__dirname, 'dsh-runtime');
-}
+const runtimeLayout = createRuntimeLayout({
+  localRuntimeDir: LOCAL_RUNTIME_DIR,
+  appDir: __dirname
+});
+const {
+  getBundledRuntimeDir,
+  isLocalRuntimeUsable,
+  getLocalDshVersion,
+  getBundledNodeExe,
+  getBundledPnpmCjs,
+  getRuntimeBinDirs
+} = runtimeLayout;
 
-function getLocalRuntimeDshCli() {
-  return path.join(LOCAL_RUNTIME_DIR, 'node_modules', '@deepseek-ai', 'dsh', 'bin', 'dsh.mjs');
-}
-
-function isLocalRuntimeUsable() {
-  return fs.existsSync(getLocalRuntimeDshCli());
-}
-
-function getLocalDshVersion() {
-  const pkgPath = path.join(LOCAL_RUNTIME_DIR, 'node_modules', '@deepseek-ai', 'dsh', 'package.json');
-  try {
-    return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version || null;
-  } catch {
-    return null;
-  }
+function getCurrentDshVersion() {
+  return runtimeLayout.getCurrentDshVersion(getRuntimeDir());
 }
 
 function isLocalRuntimeAvailable() {
@@ -269,17 +262,6 @@ function isLocalRuntimeAvailable() {
 function getRuntimeDir() {
   if (isLocalRuntimeAvailable()) return LOCAL_RUNTIME_DIR;
   return getBundledRuntimeDir();
-}
-
-function getRuntimeBinDirs() {
-  const dirs = [];
-  const nodeExe = getBundledNodeExe();
-  if (nodeExe && path.basename(nodeExe).toLowerCase() === 'node.exe') {
-    dirs.push(path.dirname(nodeExe));
-  }
-  const pnpmCjs = getBundledPnpmCjs();
-  if (pnpmCjs) dirs.push(path.dirname(pnpmCjs));
-  return dirs;
 }
 
 // prependPathDirs imported from ./lib/env-utils
@@ -321,37 +303,6 @@ function buildBackendEnv() {
     }
   }
   return env;
-}
-
-function getBundledNodeExe() {
-  const bundledNode = path.join(getBundledRuntimeDir(), 'node.exe');
-  if (fs.existsSync(bundledNode)) return bundledNode;
-  return process.execPath;
-}
-
-function getBundledPnpmCjs() {
-  const runtimeDir = getBundledRuntimeDir();
-  const candidates = [
-    path.join(runtimeDir, 'pnpm.cjs'),
-    path.join(runtimeDir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'),
-    path.join(runtimeDir, 'node_modules', 'pnpm', 'dist', 'pnpm.cjs')
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
-  }
-  return null;
-}
-
-function getCurrentDshVersion() {
-  const runtimeDir = getRuntimeDir();
-  const source = path.resolve(runtimeDir) === path.resolve(LOCAL_RUNTIME_DIR) ? 'hot-update' : 'factory';
-  const pkgPath = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json');
-  try {
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-    return { version: pkg.version || 'unknown', source };
-  } catch {
-    return { version: 'unknown', source };
-  }
 }
 
 function assertTrustedSender(event) {
