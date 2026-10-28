@@ -13,6 +13,7 @@
     "test": "node --test test/*.test.js",
     "test:integration": "node --test test/integration.test.js",
     "runtime:prepare": "node prepare-runtime.js",
+    "runtime:python": "node scripts/prepare-python-runtime.js",
     "clean:legacy": "node scripts/clean-legacy.js",
     "dist": "npm run runtime:prepare && electron-builder --win --publish never"
   },
@@ -36,7 +37,8 @@
       "lib/",
       "package.json",
       "build/",
-      "dsh-runtime/"
+      "dsh-runtime/",
+      "dsh-runtime/python/**"
     ],
     "directories": {
       "output": "dist"

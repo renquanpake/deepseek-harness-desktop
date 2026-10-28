@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const { ensurePythonRuntime, STAMP_FILENAME, RUNTIME_SUBDIR } = require('../lib/python-runtime');
 
@@ -87,6 +88,8 @@ async function main(argv = process.argv.slice(2)) {
   console.log(`[prepare-python-runtime] Python: ${options.python}`);
   console.log(`[prepare-python-runtime] 运行时目录: ${path.join(options.runtimeDir, RUNTIME_SUBDIR)}`);
   console.log(`[prepare-python-runtime] 清单: ${options.manifest}`);
+
+  fs.mkdirSync(path.join(options.runtimeDir, RUNTIME_SUBDIR), { recursive: true });
 
   const result = await ensurePythonRuntime({
     runtimeDir: options.runtimeDir,

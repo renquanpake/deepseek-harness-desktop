@@ -131,6 +131,12 @@
     },
     "backendNotReady": {
       "message": "后端未能就绪，当前显示空白页。可在「引擎与救援」菜单切换引擎或选择安全模式。"
+    },
+    "progress": {
+      "hotUpdateCore": "正在通过国内镜像热更新 DSH 内核...",
+      "syncPresets": "正在同步出厂预置插件（{count} 项）...",
+      "downloadShell": "正在下载客户端外壳更新 ({percent}%)...",
+      "launchInstaller": "正在启动安装程序..."
     }
   },
   "notify": {
@@ -150,6 +156,9 @@
     "autoUpdateFailed": "自动更新失败",
     "nsisInstallFailed": "NSIS 安装启动失败",
     "integrityCheckFailed": "安装包安全校验未通过",
-    "integrityCheckFailedMessage": "外壳更新包 SHA-256 校验失败（原因: {reason}），文件已被安全拦截并清理。"
+    "integrityCheckFailedMessage": "外壳更新包 SHA-256 校验失败（原因: {reason}），文件已被安全拦截并清理。",
+    "runtimeMissing": "DSH 运行时缺失",
+    "hotUpdateNodeMissing": "内置 node.exe 或 pnpm.cjs 缺失，无法执行内核热更新",
+    "hotUpdateFailed": "DSH 内核热更新失败，请检查网络或稍后重试"
   }
 }

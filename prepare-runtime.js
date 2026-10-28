@@ -7,6 +7,7 @@ const RUNTIME_DIR = path.join(ROOT_DIR, 'dsh-runtime');
 const PRESET_PROFILE_DIR = path.join(RUNTIME_DIR, 'default-profile');
 const DSH_VERSION = process.env.DSH_VERSION || 'latest';
 const NPM_MIRROR_REGISTRY = 'https://registry.npmmirror.com';
+const PYTHON_MANIFEST_PATH = path.join(ROOT_DIR, 'build', 'runtime-manifest.json');
 
 const PREINSTALL_PLUGINS = [
   'dsh-our-free-model',
@@ -75,8 +76,24 @@ function installBundledPnpm() {
   fs.copyFileSync(pnpmBinSrc, path.join(compatDir, 'pnpm.cjs'));
 }
 
+function preparePythonRuntime() {
+  if (process.env.DSH_SKIP_PYTHON === '1') {
+    console.log('[prepare-runtime] Skipping python runtime preparation (DSH_SKIP_PYTHON=1)');
+    return;
+  }
+  console.log('=== [6/6] Preparing optional Python runtime ===');
+  const ok = runCmd(
+    `node scripts/prepare-python-runtime.js --runtime-dir "${RUNTIME_DIR}" --manifest "${PYTHON_MANIFEST_PATH}"`,
+    ROOT_DIR,
+    true
+  );
+  if (!ok) {
+    console.warn('[prepare-runtime] Python runtime unavailable, packaging continues without it. See docs/runtime.md.');
+  }
+}
+
 function main() {
-  console.log('=== [1/5] Initializing dsh-runtime directory ===');
+  console.log('=== [1/6] Initializing dsh-runtime directory ===');
   if (fs.existsSync(RUNTIME_DIR)) {
     fs.rmSync(RUNTIME_DIR, { recursive: true, force: true });
   }
@@ -91,17 +108,17 @@ function main() {
   };
   fs.writeFileSync(path.join(RUNTIME_DIR, 'package.json'), JSON.stringify(runtimePkg, null, 2));
 
-  console.log(`=== [2/5] Bundling standalone pnpm ===`);
+  console.log(`=== [2/6] Bundling standalone pnpm ===`);
   installBundledPnpm();
 
-  console.log(`=== [3/5] Installing @deepseek-ai/dsh@${DSH_VERSION} via npmmirror ===`);
+  console.log(`=== [3/6] Installing @deepseek-ai/dsh@${DSH_VERSION} via npmmirror ===`);
   runCmd(
     `npm install @deepseek-ai/dsh@${DSH_VERSION} --no-audit --no-fund --loglevel=error --registry=${NPM_MIRROR_REGISTRY}`,
     RUNTIME_DIR,
     false
   );
 
-  console.log('=== [4/5] Pre-installing Open-Source Workbench Plugins into Preset Profile ===');
+  console.log('=== [4/6] Pre-installing Open-Source Workbench Plugins into Preset Profile ===');
   const dshBin = path.join(
     RUNTIME_DIR,
     'node_modules',
@@ -159,7 +176,7 @@ function main() {
     }
   }
 
-  console.log('=== [5/5] Recording preset dependencies and writing manifest ===');
+  console.log('=== [5/6] Recording preset dependencies and writing manifest ===');
 
   const presetDependencies = {};
   for (const plugin of installedPlugins) {
@@ -199,6 +216,8 @@ function main() {
   } catch (err) {
     console.warn('[prepare-runtime] Failed to apply directory picker patch:', err.message);
   }
+
+  preparePythonRuntime();
 
   console.log('Runtime preparation completed successfully.');
 }

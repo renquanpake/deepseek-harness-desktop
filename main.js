@@ -31,6 +31,7 @@ const { runGit, runReg, runTaskkill, runTasklist, readWindowsProcessCommandLine 
 const { isBackendReadyStatus } = require('./lib/readiness');
 const { createSingleFlight } = require('./lib/restart-guard');
 const { assertValid: assertIpcPayload } = require('./lib/ipc-schema');
+const { createI18n } = require('./lib/i18n');
 const {
   semverCompare,
   isNewer,
@@ -48,6 +49,7 @@ const {
 
 let mainWindow = null;
 let tray = null;
+let i18nInstance = null;
 let dshProcess = null;
 let crashCount = 0;
 let isQuitting = false;
@@ -82,6 +84,22 @@ let isBackendReadyState = false;
 let authenticatedBackendUrl = null;
 let worktreeCloseDialogShowing = false;
 const activeWorktreeSession = { worktreePath: null, repoPath: null, branchName: null };
+
+// app.getLocale() only has a reliable value after ready, so build the i18n singleton lazily on first use.
+function getI18n() {
+  if (!i18nInstance) {
+    let locale = null;
+    try {
+      locale = app.getLocale();
+    } catch {}
+    i18nInstance = createI18n({ locale: locale || undefined });
+  }
+  return i18nInstance;
+}
+
+function t(key, params) {
+  return getI18n().t(key, params);
+}
 
 function resolvePortableDataRoot() {
   const declaredExeDir = process.env.PORTABLE_EXECUTABLE_DIR;
@@ -485,10 +503,13 @@ async function handleWorktreeWindowClose() {
   try {
     const response = await dialog.showMessageBox(mainWindow, {
       type: 'question',
-      title: 'Worktree 沙箱会话关闭',
-      message: '当前窗口使用了独立的 Git Worktree 沙箱，请选择处理方式：',
-      detail: `Worktree 路径：${activeWorktreeSession.worktreePath || targetWorkspaceDir}\n分支：${activeWorktreeSession.branchName || '（未知）'}`,
-      buttons: ['保留目录并关闭', '销毁 Worktree 并清理分支（推荐）', '取消'],
+      title: t('dialog.worktreeClose.title'),
+      message: t('dialog.worktreeClose.message'),
+      detail: t('dialog.worktreeClose.detail', {
+        path: activeWorktreeSession.worktreePath || targetWorkspaceDir,
+        branch: activeWorktreeSession.branchName || t('dialog.common.unknown')
+      }),
+      buttons: [t('dialog.worktreeClose.keep'), t('dialog.worktreeClose.destroy'), t('dialog.worktreeClose.cancel')],
       defaultId: 1,
       cancelId: 2
     });
@@ -619,19 +640,19 @@ async function showLocalRuntimeFallbackNotice(reason, ready) {
   if (ready) {
     await dialog.showMessageBox(mainWindow, {
       type: 'warning',
-      title: '已自动回滚内核',
-      message: '检测到新版官方内核存在兼容性异常，系统已自动为您无感回滚至出厂稳定版。',
-      detail: `触发原因：${reason}\n当前已恢复由出厂内置 runtime 提供服务，工作台配置不受影响。`,
-      buttons: ['我知道了']
+      title: t('dialog.rollback.doneTitle'),
+      message: t('dialog.rollback.doneMessage'),
+      detail: t('dialog.rollback.doneDetail', { reason }),
+      buttons: [t('dialog.common.ok')]
     });
     return;
   }
   await dialog.showMessageBox(mainWindow, {
     type: 'error',
-    title: '回滚后仍未就绪',
-    message: '已回滚至出厂稳定版，但后端服务仍未就绪。',
-    detail: `触发原因：${reason}\n可在「引擎与救援」菜单切换引擎或启用故障隔离安全模式。`,
-    buttons: ['我知道了']
+    title: t('dialog.rollback.notReadyTitle'),
+    message: t('dialog.rollback.notReadyMessage'),
+    detail: t('dialog.rollback.notReadyDetail', { reason }),
+    buttons: [t('dialog.common.ok')]
   });
 }
 
@@ -710,7 +731,7 @@ function startDshBackend(resetCrash = true) {
       ].join('\n');
       console.error(missingMessage);
       if (!isQuitting && mainWindow) {
-        dialog.showErrorBox('DSH 运行时缺失', missingMessage);
+        dialog.showErrorBox(t('error.runtimeMissing'), missingMessage);
       }
       return false;
     }
@@ -760,7 +781,7 @@ function startDshBackend(resetCrash = true) {
       dshProcess = null;
     }
     if (!isQuitting && mainWindow) {
-      dialog.showErrorBox('dsh 后端启动失败', String(err.message || err));
+      dialog.showErrorBox(t('error.backendStartFailed'), String(err.message || err));
     }
   });
 
@@ -789,8 +810,8 @@ function startDshBackend(resetCrash = true) {
       if (mainWindow) {
         dialog.showMessageBox(mainWindow, {
           type: 'error',
-          title: 'DSH Studio',
-          message: '后端连续崩溃，已停止自动重启。'
+          title: t('dialog.common.dsStudioTitle'),
+          message: t('error.backendCrashLoop')
         });
       }
     } else if (decision.action === 'restart') {
@@ -1126,7 +1147,7 @@ async function installHotUpdateCore(targetVersion) {
   const nodeExe = getBundledNodeExe();
   const pnpmCjs = getBundledPnpmCjs();
   if (!nodeExe || !pnpmCjs) {
-    throw new Error('内置 node.exe 或 pnpm.cjs 缺失，无法执行内核热更新');
+    throw new Error(t('error.hotUpdateNodeMissing'));
   }
   fs.mkdirSync(LOCAL_RUNTIME_DIR, { recursive: true });
   const pkgJsonPath = path.join(LOCAL_RUNTIME_DIR, 'package.json');
@@ -1136,13 +1157,13 @@ async function installHotUpdateCore(targetVersion) {
       JSON.stringify({ name: 'dsh-local-hot-update', version: '0.0.0', private: true }, null, 2)
     );
   }
-  setWindowProgress('正在通过国内镜像热更新 DSH 内核...');
+  setWindowProgress(t('dialog.progress.hotUpdateCore'));
   const corePackage = targetVersion
     ? `@deepseek-ai/dsh@${targetVersion}`
     : '@deepseek-ai/dsh@latest';
   const coreInstalled = await runPnpmAdd(nodeExe, pnpmCjs, [corePackage]);
   if (!coreInstalled) {
-    throw new Error('DSH 内核热更新失败，请检查网络或稍后重试');
+    throw new Error(t('error.hotUpdateFailed'));
   }
   const markerFile = path.join(LOCAL_RUNTIME_DIR, '.broken-marker.json');
   if (fs.existsSync(markerFile)) {
@@ -1154,7 +1175,7 @@ async function installHotUpdateCore(targetVersion) {
   if (presetPluginNames.length) {
     const added = mergeLocalRuntimePresetDependencies(presetPluginNames);
     if (added.length) {
-      setWindowProgress(`正在同步出厂预置插件（${presetPluginNames.length} 项）...`);
+      setWindowProgress(t('dialog.progress.syncPresets', { count: presetPluginNames.length }));
       const pluginsInstalled = await runPnpmAdd(nodeExe, pnpmCjs, added.map((name) => `${name}@*`));
       const missing = added.filter((name) => !isPresetPluginInstalled(name));
       if (missing.length) {
@@ -1211,8 +1232,8 @@ async function revertToFactoryRuntime() {
     } catch (err) {
       dialog.showMessageBox(mainWindow, {
         type: 'error',
-        title: '回退失败',
-        message: `删除 local-runtime 目录失败: ${err.message}`
+        title: t('dialog.revert.failedTitle'),
+        message: t('dialog.revert.failedMessage', { message: err.message })
       });
       return;
     }
@@ -1222,8 +1243,8 @@ async function revertToFactoryRuntime() {
   if (mainWindow) {
     dialog.showMessageBox(mainWindow, {
       type: 'info',
-      title: '已回退至出厂内置内核',
-      message: '本地热更新内核已清理，当前使用安装包自带的出厂 dsh-runtime。'
+      title: t('dialog.revert.doneTitle'),
+      message: t('dialog.revert.doneMessage')
     });
   }
 }
@@ -1232,26 +1253,36 @@ async function showUpdateCheckResult(hasUpdate, coreInfo, shellInfo, remoteCore,
   if (!hasUpdate) {
     await dialog.showMessageBox(mainWindow, {
       type: 'info',
-      title: '检查更新',
-      message: '当前已是最新状态！',
-      detail: `- DSH 官方内核版本：v${coreInfo.current} (最新)\n- 桌面外壳版本：v${shellInfo.current} (最新)`,
-      buttons: ['关闭']
+      title: t('dialog.updateCheck.title'),
+      message: t('dialog.updateCheck.upToDate'),
+      detail: t('dialog.updateCheck.upToDateDetail', { core: coreInfo.current, shell: shellInfo.current }),
+      buttons: [t('dialog.common.close')]
     });
     return null;
   }
-  const coreTag = coreInfo.needsUpdate ? '[可更新]' : '[已最新]';
-  const shellTag = shellInfo.needsUpdate ? '[可更新]' : '[已最新]';
-  const detail = `检测到可用更新：\n- DSH 官方内核：v${coreInfo.current} -> v${remoteCore || '未知'} ${coreTag}\n- 桌面宿主外壳：v${shellInfo.current} -> v${remoteShell || '未知'} ${shellTag}\n\n是否立即自动下载并更新？`;
+  const tagAvailable = t('dialog.updateCheck.tagAvailable');
+  const tagLatest = t('dialog.updateCheck.tagLatest');
+  const unknownVersion = t('dialog.updateCheck.unknownVersion');
+  const coreTag = coreInfo.needsUpdate ? tagAvailable : tagLatest;
+  const shellTag = shellInfo.needsUpdate ? tagAvailable : tagLatest;
+  const detail = t('dialog.updateCheck.availableDetail', {
+    coreCurrent: coreInfo.current,
+    coreRemote: remoteCore || unknownVersion,
+    coreTag,
+    shellCurrent: shellInfo.current,
+    shellRemote: remoteShell || unknownVersion,
+    shellTag
+  });
   let buttons;
   if (coreInfo.needsUpdate && shellInfo.needsUpdate) {
-    buttons = ['立即一键更新', '仅更新 DSH 内核', '取消'];
+    buttons = [t('dialog.updateCheck.updateAll'), t('dialog.updateCheck.updateCoreOnly'), t('dialog.common.cancel')];
   } else {
-    buttons = ['立即更新', '取消'];
+    buttons = [t('dialog.updateCheck.updateNow'), t('dialog.common.cancel')];
   }
   const response = await dialog.showMessageBox(mainWindow, {
     type: 'question',
-    title: '检测到可用更新',
-    message: '发现可升级项，是否立即执行自动更新？',
+    title: t('dialog.updateCheck.availableTitle'),
+    message: t('dialog.updateCheck.availableMessage'),
     detail,
     buttons,
     defaultId: 0,
@@ -1281,25 +1312,25 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
       if (!release) {
         dialog.showMessageBox(mainWindow, {
           type: 'warning',
-          title: '外壳更新',
-          message: '无法获取最新外壳安装包下载地址，请稍后重试或手动下载安装包。'
+          title: t('dialog.shellUpdate.unavailableTitle'),
+          message: t('dialog.shellUpdate.unavailableMessage')
         });
         clearWindowProgress();
       } else {
         const tmpDir = os.tmpdir();
         const installerName = `${path.basename(release.installerUrl).split('?')[0] || 'DeepSeek-Harness-Desktop-Setup.exe'}`;
         const installerPath = path.join(tmpDir, installerName);
-        setWindowProgress('正在下载客户端外壳更新 (0%)...');
+        setWindowProgress(t('dialog.progress.downloadShell', { percent: 0 }));
         await downloadWithProxies(release.installerUrl, installerPath, (percent) => {
-          setWindowProgress(`正在下载客户端外壳更新 (${percent}%)...`);
+          setWindowProgress(t('dialog.progress.downloadShell', { percent }));
         }, { proxies: downloadProxies(), timeoutMs: UPDATER.DOWNLOAD_TIMEOUT_MS });
 
         const integrity = verifyInstallerIntegrity(installerPath, release.sha256);
         if (!integrity.ok) {
           clearWindowProgress();
           dialog.showErrorBox(
-            '安装包安全校验未通过',
-            `外壳更新包 SHA-256 校验失败（原因: ${integrity.reason}），文件已被安全拦截并清理。`
+            t('error.integrityCheckFailed'),
+            t('error.integrityCheckFailedMessage', { reason: integrity.reason })
           );
           return;
         }
@@ -1310,20 +1341,20 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
           clearWindowProgress();
           await dialog.showMessageBox(mainWindow, {
             type: 'info',
-            title: '便携版更新',
-            message: '便携版更新已下载完成',
-            detail: `解压或覆盖 ${folder} 中的旧安装文件即可。用户数据保存在 portable-data 中，不会丢失。`
+            title: t('dialog.shellUpdate.portableTitle'),
+            message: t('dialog.shellUpdate.portableMessage'),
+            detail: t('dialog.shellUpdate.portableDetail', { folder })
           });
         } else {
           const verifyDesc = integrity.verified
-            ? `✓ 官方 SHA-256 哈希校验已通过 (${integrity.actual.slice(0, 16)}...)`
-            : `本地 SHA-256 指纹: ${integrity.actual ? integrity.actual.slice(0, 16) + '...' : '未知'}`;
+            ? t('dialog.shellUpdate.verifyPassed', { hash: integrity.actual.slice(0, 16) })
+            : t('dialog.shellUpdate.verifyLocal', { hash: integrity.actual ? integrity.actual.slice(0, 16) : t('dialog.updateCheck.unknownVersion') });
           const confirmInstall = await dialog.showMessageBox(mainWindow, {
             type: 'question',
-            title: '安装客户端更新',
-            message: `桌面外壳更新包 (v${remoteShell}) 已就绪，是否立即启动安装程序？`,
-            detail: `${verifyDesc}\n启动安装程序后当前窗口将自动关闭。`,
-            buttons: ['立即安装', '稍后手动安装'],
+            title: t('dialog.shellUpdate.confirmTitle'),
+            message: t('dialog.shellUpdate.confirmMessage', { version: remoteShell }),
+            detail: t('dialog.shellUpdate.confirmDetail', { verify: verifyDesc }),
+            buttons: [t('dialog.shellUpdate.installNow'), t('dialog.shellUpdate.installLater')],
             defaultId: 0,
             cancelId: 1
           });
@@ -1331,7 +1362,7 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
             clearWindowProgress();
             return;
           }
-          setWindowProgress('正在启动安装程序...');
+          setWindowProgress(t('dialog.progress.launchInstaller'));
           killProcessTree();
           try {
             if (typeof app.releaseSingleInstanceLock === 'function') {
@@ -1344,7 +1375,7 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
             const installer = spawn(installerPath, [], { detached: true, stdio: 'ignore' });
             installer.unref();
           } catch (err) {
-            dialog.showErrorBox('NSIS 安装启动失败', String(err.message || err));
+            dialog.showErrorBox(t('error.nsisInstallFailed'), String(err.message || err));
             clearWindowProgress();
             return;
           }
@@ -1362,22 +1393,22 @@ async function performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, o
       if (ready) {
         await dialog.showMessageBox(mainWindow, {
           type: 'info',
-          title: '热更新成功',
-          message: `DSH 内核已热更新到 ${remoteCore}`,
-          detail: '后端已自动重启。若新版出现异常，可在「引擎与救援」→「⏪ 回退至出厂内置内核」一键回滚。'
+          title: t('dialog.hotUpdate.successTitle'),
+          message: t('dialog.hotUpdate.successMessage', { version: remoteCore }),
+          detail: t('dialog.hotUpdate.successDetail')
         });
       } else {
         await dialog.showMessageBox(mainWindow, {
           type: 'warning',
-          title: '热更新完成但后端未就绪',
-          message: `DSH 内核已热更新到 ${remoteCore}，但后端未能就绪。`,
-          detail: '请在「引擎与救援」菜单检查引擎状态，或点击「⏪ 回退至出厂内置内核」回滚。'
+          title: t('dialog.hotUpdate.notReadyTitle'),
+          message: t('dialog.hotUpdate.notReadyMessage', { version: remoteCore }),
+          detail: t('dialog.hotUpdate.notReadyDetail')
         });
       }
     }
   } catch (err) {
     clearWindowProgress();
-    dialog.showErrorBox('自动更新失败', String(err.message || err));
+    dialog.showErrorBox(t('error.autoUpdateFailed'), String(err.message || err));
   }
 }
 
@@ -1438,7 +1469,7 @@ function updateTrayMenu() {
     const isAuto = getAutoStart(app);
     const menu = Menu.buildFromTemplate([
       {
-        label: '显示主窗口',
+        label: t('tray.showWindow'),
         click: () => {
           if (mainWindow) {
             mainWindow.show();
@@ -1447,11 +1478,11 @@ function updateTrayMenu() {
         }
       },
       {
-        label: '检查更新',
+        label: t('tray.checkUpdates'),
         click: () => runUpdateCheck(false)
       },
       {
-        label: '开机自动启动',
+        label: t('tray.autoStart'),
         type: 'checkbox',
         checked: isAuto,
         click: (item) => {
@@ -1465,7 +1496,7 @@ function updateTrayMenu() {
       },
       { type: 'separator' },
       {
-        label: '退出 DSH Studio',
+        label: t('tray.quit'),
         click: () => {
           isQuitting = true;
           app.quit();
@@ -1507,14 +1538,14 @@ function createTray() {
 function buildNativeAppMenu() {
   const template = [
     {
-      label: '工作台 (Studio)',
+      label: t('menu.studio.title'),
       submenu: [
         {
-          label: '新建独立工作区分支 (Git Worktree)...',
+          label: t('menu.studio.newWorktree'),
           click: async () => {
             const res = await dialog.showOpenDialog(mainWindow, {
               properties: ['openDirectory'],
-              title: '选择 Git 仓库目录以自动创建隔离 Worktree'
+              title: t('dialog.openWorktreeDir.title')
             });
             if (!res.canceled && res.filePaths[0]) {
               const session = createIsolatedGitWorktree(res.filePaths[0]);
@@ -1527,7 +1558,7 @@ function buildNativeAppMenu() {
           }
         },
         {
-          label: '粘贴剪贴板截图/文本至输入框 (Alt+Shift+V)',
+          label: t('menu.studio.pasteClipboard'),
           accelerator: 'Alt+Shift+V',
           click: () => {
             feedClipboardIntoEditor();
@@ -1535,7 +1566,7 @@ function buildNativeAppMenu() {
         },
         { type: 'separator' },
         {
-          label: '窗口始终置顶 (悬浮伴侣模式)',
+          label: t('menu.studio.alwaysOnTop'),
           type: 'checkbox',
           checked: mainWindow ? mainWindow.isAlwaysOnTop() : false,
           click: (item) => {
@@ -1543,7 +1574,7 @@ function buildNativeAppMenu() {
           }
         },
         {
-          label: '开机自动启动 (Windows 登录自启)',
+          label: t('menu.studio.autoStart'),
           type: 'checkbox',
           checked: getAutoStart(app),
           click: (item) => {
@@ -1557,7 +1588,7 @@ function buildNativeAppMenu() {
         },
         { type: 'separator' },
         {
-          label: '退出程序',
+          label: t('menu.app.quit'),
           click: () => {
             isQuitting = true;
             app.quit();
@@ -1566,19 +1597,21 @@ function buildNativeAppMenu() {
       ]
     },
     {
-      label: '引擎与更新 (Engine & Updates)',
+      label: t('menu.engine.title'),
       submenu: [
         {
           label: (() => {
             const core = getCurrentDshVersion();
-            const sourceLabel = core.source === 'hot-update' ? '热更新内核' : '内置出厂内核';
-            return `外壳 v${getShellVersion()}  ·  DSH 内核 v${core.version} (${sourceLabel})`;
+            const sourceLabel = core.source === 'hot-update'
+              ? t('menu.engine.sourceHotUpdate')
+              : t('menu.engine.sourceFactory');
+            return t('menu.engine.status', { shell: getShellVersion(), core: core.version, source: sourceLabel });
           })(),
           enabled: false
         },
         { type: 'separator' },
         {
-          label: '🩺 环境自动体检与自愈 (清理死锁与重置连接)...',
+          label: t('menu.engine.selfRepair'),
           click: async () => {
             const report = runSelfRepair({
               dshHome: DSH_HOME,
@@ -1589,31 +1622,31 @@ function buildNativeAppMenu() {
             if (mainWindow) {
               const actionList = report.actions && report.actions.length
                 ? report.actions.map((a) => `• ${a}`).join('\n')
-                : '• 系统环境检测正常，未发现死锁或异常标记。';
+                : t('dialog.selfRepair.noActions');
               dialog.showMessageBox(mainWindow, {
                 type: 'info',
-                title: '环境体检与自愈报告',
-                message: ready ? '自愈完成，服务已就绪！' : '自愈执行完毕，正在等待服务重连...',
-                detail: `${actionList}\n\n当前端口: ${currentPort}\n引擎模式: ${currentEngine}`
+                title: t('dialog.selfRepair.title'),
+                message: ready ? t('dialog.selfRepair.readyMessage') : t('dialog.selfRepair.pendingMessage'),
+                detail: t('dialog.selfRepair.detail', { actions: actionList, port: currentPort, engine: currentEngine })
               });
             }
           }
         },
         {
-          label: '🔄 检查更新 (自动联检内核与外壳)',
+          label: t('menu.engine.checkUpdates'),
           click: () => {
             runUpdateCheck(false);
           }
         },
         {
-          label: '⏪ 回退至出厂内置内核',
+          label: t('menu.engine.revertFactory'),
           click: () => {
             revertToFactoryRuntime();
           }
         },
         { type: 'separator' },
         {
-          label: '运行引擎：Windows 原生模式 (推荐，速度最快)',
+          label: t('menu.engine.winNative'),
           type: 'radio',
           checked: currentEngine === 'win-native',
           click: async () => {
@@ -1622,15 +1655,15 @@ function buildNativeAppMenu() {
           }
         },
         {
-          label: '运行引擎：WSL2 兼容模式 (适用于 Linux 依赖工具)',
+          label: t('menu.engine.wsl2'),
           type: 'radio',
           checked: currentEngine === 'wsl2',
           click: async () => {
             if (!isWindowsPlatform()) {
               dialog.showMessageBox(mainWindow, {
                 type: 'warning',
-                title: 'DSH Studio',
-                message: 'WSL2 引擎仅在 Windows 主机上可用。'
+                title: t('dialog.common.dsStudioTitle'),
+                message: t('dialog.wsl2Unavailable.message')
               });
               currentEngine = 'win-native';
               return;
@@ -1641,7 +1674,7 @@ function buildNativeAppMenu() {
         },
         { type: 'separator' },
         {
-          label: '故障排查安全模式 (临时禁用第三方插件)',
+          label: t('menu.engine.safeMode'),
           type: 'checkbox',
           checked: isSafeMode,
           click: async (item) => {
@@ -1650,15 +1683,15 @@ function buildNativeAppMenu() {
           }
         },
         {
-          label: '恢复出厂预置插件 (重置界面增强组件)',
+          label: t('menu.engine.restorePresets'),
           click: async () => {
             hydratePresetPluginsIfNeeded(true);
             await restartWithCurrentConfig();
             if (mainWindow) {
               dialog.showMessageBox(mainWindow, {
                 type: 'info',
-                title: '预置插件重置',
-                message: '已成功强制恢复出厂预置插件配置并重启工作台！'
+                title: t('dialog.presetReset.title'),
+                message: t('dialog.presetReset.message')
               });
             }
           }
@@ -1666,56 +1699,56 @@ function buildNativeAppMenu() {
       ]
     },
     {
-      label: 'Windows 系统集成',
+      label: t('menu.system.title'),
       submenu: [
         {
-          label: '添加 Windows 文件夹右键快捷启动',
+          label: t('menu.system.registerContextMenu'),
           click: () => {
             const result = registerWindowsContextMenu();
             if (result.total === 0) {
               dialog.showMessageBox(mainWindow, {
                 type: 'warning',
-                title: '右键菜单集成',
-                message: '右键菜单注册仅在 Windows 主机上可用。'
+                title: t('dialog.contextMenu.title'),
+                message: t('dialog.contextMenu.registerUnavailable')
               });
               return;
             }
             const ok = result.failed === 0;
             dialog.showMessageBox(mainWindow, {
               type: ok ? 'info' : 'warning',
-              title: '右键菜单集成',
+              title: t('dialog.contextMenu.title'),
               message: ok
-                ? `注册成功（${result.ok}/${result.total}）！现在可在任意文件夹右键选择「Open in New Git Worktree (DSH Studio)」。`
-                : `部分成功（${result.ok}/${result.total}），${result.failed} 项写入失败，请检查系统权限。`
+                ? t('dialog.contextMenu.registerSuccess', { ok: result.ok, total: result.total })
+                : t('dialog.contextMenu.registerPartial', { ok: result.ok, total: result.total, failed: result.failed })
             });
           }
         },
         {
-          label: '移除 Windows 文件夹右键快捷项',
+          label: t('menu.system.unregisterContextMenu'),
           click: () => {
             const result = unregisterWindowsContextMenu();
             if (result.total === 0) {
               dialog.showMessageBox(mainWindow, {
                 type: 'warning',
-                title: '右键菜单集成',
-                message: '右键菜单移除仅在 Windows 主机上可用。'
+                title: t('dialog.contextMenu.title'),
+                message: t('dialog.contextMenu.unregisterUnavailable')
               });
               return;
             }
             dialog.showMessageBox(mainWindow, {
               type: 'info',
-              title: '右键菜单集成',
-              message: `已尝试移除 ${result.total} 组资源管理器右键菜单项（成功 ${result.ok}，跳过 ${result.failed}）。`
+              title: t('dialog.contextMenu.title'),
+              message: t('dialog.contextMenu.unregisterResult', { total: result.total, ok: result.ok, failed: result.failed })
             });
           }
         },
         { type: 'separator' },
         {
-          label: '打开 DSH 数据与插件目录',
+          label: t('menu.system.openDataDir'),
           click: () => shell.openPath(DSH_HOME)
         },
         {
-          label: '打开开发者调试工具 (DevTools)',
+          label: t('menu.system.openDevTools'),
           accelerator: 'F12',
           click: () => {
             if (mainWindow) mainWindow.webContents.toggleDevTools();
@@ -1942,7 +1975,7 @@ ipcMain.handle('dsh:create-worktree-dialog', async (event) => {
   assertIpcPayload('dsh:create-worktree-dialog', undefined);
   const res = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
-    title: '选择 Git 仓库目录以自动创建隔离 Worktree'
+    title: t('dialog.openWorktreeDir.title')
   });
   if (!res.canceled && res.filePaths[0]) {
     const session = createIsolatedGitWorktree(res.filePaths[0]);
@@ -2069,8 +2102,8 @@ app.whenReady().then(async () => {
   if (!ready && mainWindow) {
     dialog.showMessageBox(mainWindow, {
       type: 'warning',
-      title: 'DSH Studio',
-      message: '后端未能就绪，当前显示空白页。可在「引擎与救援」菜单切换引擎或选择安全模式。'
+      title: t('dialog.common.dsStudioTitle'),
+      message: t('dialog.backendNotReady.message')
     });
   }
   setTimeout(() => {

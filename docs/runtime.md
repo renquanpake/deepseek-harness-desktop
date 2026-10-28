@@ -2,7 +2,7 @@
 
 本文档说明桌面外壳内置 Python 与 Office 文档处理能力所依赖的运行时布局、安装命令、离线部署方式与常见故障排查。
 
-当前实现由 `lib/python-runtime.js` 与 `scripts/prepare-python-runtime.js` 提供，版本清单固定为 `build/runtime-manifest.json`。运行时准备是独立步骤，尚未接入 `main.js` 启动流程和 `prepare-runtime.js` 打包流程。
+当前实现由 `lib/python-runtime.js` 与 `scripts/prepare-python-runtime.js` 提供，版本清单固定为 `build/runtime-manifest.json`。Python 运行时准备已作为 `runtime:prepare` 的可选增强步骤接入打包链路（allowFail 语义，见第 9 节），也可以独立命令方式运行。
 
 ## 1. 运行时布局
 
@@ -38,7 +38,8 @@ dsh-runtime/
 说明：
 
 - 解释器本身不随安装包分发，`ensurePythonRuntime` 使用系统或用户指定的 CPython 3.11 / 3.12。
-- `python/` 目录只保存版本 stamp，不复制 site-packages。
+- `python/` 目录只保存版本 stamp，不复制 site-packages；打包时该目录由 `scripts/prepare-python-runtime.js` 按需创建。
+- `python/` 目录遵循"有内容才打包"：打包 glob 只收集目录内实际存在的文件，构建机跳过 Python 步骤或安装失败时目录中不会有 stamp，安装包内也就没有这些产物，详见第 9 节。
 - stamp 与当前探测到的 Python 版本不一致时，不会信任旧 stamp，会重新通过 `pip show` 校验。
 - 安装失败时不会写入新的 stamp，旧 stamp 保持原样，下一次执行可通过 `pip show` 继续补齐。
 
@@ -60,6 +61,9 @@ dsh-runtime/
 
 ```bash
 # 使用默认 dsh-runtime 目录与 build/runtime-manifest.json
+npm run runtime:python
+
+# 直接调用脚本
 node scripts/prepare-python-runtime.js
 
 # 指定运行时目录、Python 可执行文件与清单
@@ -233,3 +237,28 @@ python -m pip install --only-binary=:all: numpy==2.1.3
 - 不隐式下载解释器、pip 或任何包。
 - 网络行为完全来自显式执行的 pip 命令，可通过 pip 环境变量控制镜像、代理与离线模式。
 - 不在 stamp 中记录凭据、镜像密码或代理信息。
+
+## 9. 构建与打包链路集成
+
+### 触发方式
+
+- `npm run runtime:prepare` 是打包主步骤（`npm run dist` 会先执行它）。`prepare-runtime.js` 在完成 Node / pnpm 运行时与出厂插件准备后，最后一步以可选增强方式调用：
+
+```bash
+node scripts/prepare-python-runtime.js --runtime-dir dsh-runtime --manifest build/runtime-manifest.json
+```
+
+- Python 准备也可以单独触发：`npm run runtime:python`，或使用第 3 节的命令行形式。
+- 子进程继承当前环境变量，`npm run dist` 或 `npm run runtime:prepare` 前设置 `DSH_PYTHON` 即可指定构建机使用的 Python 可执行文件。
+
+### 失败语义（allowFail）
+
+- Python 步骤是可选增强，不引入 `dist:full` 之类的独立打包入口。构建机没有 Python、版本不受支持、`pip install` 失败或 stamp 写入失败时，仅输出 `[prepare-runtime] Warning` 告警，`runtime:prepare` 与 `electron-builder` 打包继续正常完成。
+- 构建机缺少 Python 时，安装包内没有 Python stamp 产物；目标机器或构建机装好 CPython 3.11 / 3.12 后，可补跑 `npm run runtime:python` 生成 stamp。
+- 需要显式跳过该步骤时，设置 `DSH_SKIP_PYTHON=1` 后执行 `runtime:prepare` 或 `dist`。
+
+### 产物位置与打包配置
+
+- Python 运行时产物位于 `dsh-runtime/python/python-runtime.json`：`lib/python-runtime.js` 的 `RUNTIME_SUBDIR` 为 `python`，与 Node 运行时共用同一个 `dsh-runtime/` 根目录，由 `scripts/prepare-python-runtime.js` 按需创建。
+- `package.json` 的 `build.files` 包含 `dsh-runtime/python/**`，与 CLI 默认写入位置保持一致。该 glob 有内容才打包：目录缺失或为空时不会向安装包加入任何文件。
+- `build.asarUnpack` 已有 `dsh-runtime/**` 规则，`dsh-runtime/python/` 随整个 `dsh-runtime/` 一起从 asar 解包，安装后可在 `app.asar.unpacked` 下直接读取。

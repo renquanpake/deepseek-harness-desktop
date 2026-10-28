@@ -131,6 +131,12 @@
     },
     "backendNotReady": {
       "message": "The backend is not ready, so a blank page is shown. Use the \"Engine & Updates\" menu to switch engines or choose safe mode."
+    },
+    "progress": {
+      "hotUpdateCore": "Hot-updating DSH core via domestic mirror...",
+      "syncPresets": "Syncing factory preset plugins ({count} items)...",
+      "downloadShell": "Downloading shell update ({percent}%)...",
+      "launchInstaller": "Launching installer..."
     }
   },
   "notify": {
@@ -150,6 +156,9 @@
     "autoUpdateFailed": "Automatic update failed",
     "nsisInstallFailed": "Failed to launch NSIS installer",
     "integrityCheckFailed": "Installer Security Verification Failed",
-    "integrityCheckFailedMessage": "Shell update package SHA-256 verification failed (reason: {reason}). The file has been blocked and removed for security."
+    "integrityCheckFailedMessage": "Shell update package SHA-256 verification failed (reason: {reason}). The file has been blocked and removed for security.",
+    "runtimeMissing": "DSH Runtime Missing",
+    "hotUpdateNodeMissing": "Bundled node.exe or pnpm.cjs is missing; the core hot update cannot run.",
+    "hotUpdateFailed": "DSH core hot update failed. Please check your network or try again later."
   }
 }
