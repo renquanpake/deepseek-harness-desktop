@@ -187,3 +187,36 @@ test('adoptCapturedPort only reports a changed port', () => {
   assert.strictEqual(adoptCapturedPort('http://127.0.0.1:3080/?token=x', 3080), null);
   assert.strictEqual(adoptCapturedPort('nope', 3080), null);
 });
+
+const { validateProfileManifest, readProfileManifest } = require('../lib/dsh-adapter');
+
+test('validateProfileManifest enforces the dsh.profile.bundles shape', () => {
+  assert.strictEqual(validateProfileManifest({ dsh: { profile: { bundles: ['a', 'b'] } } }).ok, true);
+  assert.strictEqual(validateProfileManifest({ dsh: { profile: { bundles: [] } } }).ok, true);
+
+  const missing = validateProfileManifest({ dsh: {} });
+  assert.strictEqual(missing.ok, false);
+  assert.match(missing.errors[0], /dsh\.profile/);
+
+  const wrongType = validateProfileManifest({ dsh: { profile: { bundles: 'a' } } });
+  assert.strictEqual(wrongType.ok, false);
+  assert.match(wrongType.errors[0], /array/);
+
+  const badEntry = validateProfileManifest({ dsh: { profile: { bundles: ['a', 42] } } });
+  assert.strictEqual(badEntry.ok, false);
+  assert.match(badEntry.errors[0], /non-empty strings/);
+
+  assert.strictEqual(validateProfileManifest(null).ok, false);
+});
+
+test('readProfileManifest tolerates missing or broken files', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-profile-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  assert.strictEqual(readProfileManifest(root), null);
+
+  fs.writeFileSync(path.join(root, 'package.json'), '{bad json');
+  assert.strictEqual(readProfileManifest(root), null);
+
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ dsh: { profile: { bundles: [] } } }));
+  assert.deepStrictEqual(readProfileManifest(root).dsh.profile.bundles, []);
+});

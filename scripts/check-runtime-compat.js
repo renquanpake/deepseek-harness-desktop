@@ -8,7 +8,9 @@ const {
   resolveDshCommand,
   readDshVersion,
   isVersionSupported,
-  describeSupportRange
+  describeSupportRange,
+  readProfileManifest,
+  validateProfileManifest
 } = require('../lib/dsh-adapter');
 
 function findPnpm(runtimeDir, fsImpl = fs) {
@@ -54,7 +56,15 @@ function checkRuntime({ runtimeDir, fsImpl = fs, platform = process.platform } =
   } catch {
     /* 检查失败按缺失处理 */
   }
-  if (!hasPreset) warnings.push('未找到 default-profile，预置插件不会生效');
+  if (!hasPreset) {
+    warnings.push('未找到 default-profile，预置插件不会生效');
+  } else {
+    const manifest = readProfileManifest(path.dirname(presetProfile), fsImpl);
+    const verdict = validateProfileManifest(manifest);
+    if (!verdict.ok) {
+      problems.push(`default-profile 结构不符合当前上游格式：${verdict.errors.join('; ')}`);
+    }
+  }
 
   return {
     ok: problems.length === 0,

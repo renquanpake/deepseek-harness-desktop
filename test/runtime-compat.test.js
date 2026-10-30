@@ -26,7 +26,10 @@ function makeRuntime(t, { version = '0.2.1', entry = 'bin/dsh.mjs', pnpm = true,
   }
   if (preset) {
     fs.mkdirSync(path.join(root, 'default-profile', 'profiles', 'web'), { recursive: true });
-    fs.writeFileSync(path.join(root, 'default-profile', 'profiles', 'web', 'package.json'), '{}');
+    const manifest = preset === 'invalid'
+      ? { name: 'dsh-profile-web' }
+      : { name: 'dsh-profile-web', dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } };
+    fs.writeFileSync(path.join(root, 'default-profile', 'profiles', 'web', 'package.json'), JSON.stringify(manifest));
   }
   return root;
 }
@@ -66,6 +69,13 @@ test('missing pnpm or preset profile only warns', (t) => {
   const result = checkRuntime({ runtimeDir });
   assert.strictEqual(result.ok, true);
   assert.strictEqual(result.warnings.length, 2);
+});
+
+test('a preset profile with the wrong schema is rejected', (t) => {
+  const runtimeDir = makeRuntime(t, { preset: 'invalid' });
+  const result = checkRuntime({ runtimeDir });
+  assert.strictEqual(result.ok, false);
+  assert.match(result.problems.join('\n'), /dsh\.profile/);
 });
 
 test('parseArgs defaults to the local dsh-runtime directory', () => {
