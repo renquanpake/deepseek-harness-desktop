@@ -335,6 +335,58 @@ test('a core that fails the contract check is quarantined and rolled back', asyn
   assert.match(harness.errors[0].message, /hotUpdateIncompatible/);
 });
 
+test('a verified core is recorded as the last good version', async (t) => {
+  const harness = makeHarness(t, {
+    messageBoxResponse: { response: 0 },
+    modules: {
+      updateCheck: {
+        checkCoreVersion: async () => '0.2.1',
+        checkShellVersion: async () => '0.2.1',
+        checkReleaseAssets: async () => null
+      }
+    }
+  });
+
+  await harness.flow.runUpdateCheck(true);
+
+  const marker = path.join(path.dirname(harness.localRuntimeDir), 'last-good-core.json');
+  assert.strictEqual(fs.existsSync(marker), true);
+  assert.strictEqual(JSON.parse(fs.readFileSync(marker, 'utf8')).version, '0.2.1');
+});
+
+test('a failed verification restores the last good core instead of the factory one', async (t) => {
+  const harness = makeHarness(t, {
+    messageBoxResponse: { response: 0 },
+    verifyRuntime: async () => ({
+      ok: false,
+      steps: [{ name: 'authenticated index serves the web shell', ok: false, detail: '401' }]
+    }),
+    modules: {
+      updateCheck: {
+        checkCoreVersion: async () => '0.2.1',
+        checkShellVersion: async () => '0.2.1',
+        checkReleaseAssets: async () => null
+      }
+    }
+  });
+  const marker = path.join(path.dirname(harness.localRuntimeDir), 'last-good-core.json');
+  fs.writeFileSync(marker, JSON.stringify({ version: '0.2.0', verifiedAt: '2026-10-01T00:00:00.000Z' }));
+
+  await harness.flow.runUpdateCheck(true);
+
+  assert.deepStrictEqual(harness.calls.pnpmAdds, [
+    ['@deepseek-ai/dsh@0.2.1'],
+    ['@deepseek-ai/dsh@0.2.0']
+  ]);
+  assert.strictEqual(harness.calls.restart, 1);
+  const broken = fs.readdirSync(path.dirname(harness.localRuntimeDir))
+    .filter((name) => name.startsWith('local-runtime.broken.'));
+  assert.strictEqual(broken.length, 1);
+  assert.strictEqual(fs.existsSync(harness.localRuntimeDir), true, 'restored runtime stays in place');
+  assert.strictEqual(harness.errors.length, 1);
+  assert.match(harness.errors[0].message, /hotUpdateRolledBackToLastGood/);
+});
+
 test('concurrent update checks collapse into a single run', async (t) => {
   let coreChecks = 0;
   const harness = makeHarness(t, {

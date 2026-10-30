@@ -1,6 +1,6 @@
 # 故障排查
 
-本文适用于 `DeepSeek Harness` 0.3.7 桌面外壳。命令以 Windows 默认安装为例；便携模式请把 `%USERPROFILE%\.dsh` 替换为 `<程序目录>\portable-data\.dsh`。
+本文适用于 `DeepSeek Harness` 0.3.8 桌面外壳。命令以 Windows 默认安装为例；便携模式请把 `%USERPROFILE%\.dsh` 替换为 `<程序目录>\portable-data\.dsh`。
 
 菜单栏默认自动隐藏，按 `Alt` 可显示。应用内菜单名为「引擎与更新」；部分历史弹窗文案仍写作「引擎与救援」，指向同一个菜单。
 
@@ -386,6 +386,7 @@ wsl.exe -- bash -lc "curl -I http://127.0.0.1:3080"
 原因与处理：
 
 - 外壳只支持 `lib/dsh-adapter.js` 里 `SUPPORTED_DSH_RANGE` 声明的范围，防止上游破坏性变更导致白屏。
+- 热更新被判定不兼容时，外壳会先尝试恢复 `DSH_HOME/last-good-core.json` 记录的上一版内核；该文件不存在时才回退出厂内核。
 - 想继续用当前外壳：固定内核版本，例如 `set DSH_VERSION=0.2.1` 后重新执行 `npm run runtime:prepare`。
 - 想升级内核：先更新外壳代码，测试通过后由维护者抬高范围上限。
 - 手动体检：`node scripts/check-runtime-compat.js`，会校验内核版本、入口、pnpm、`default-profile` 结构与 `dsh.profile.bundles` 格式。

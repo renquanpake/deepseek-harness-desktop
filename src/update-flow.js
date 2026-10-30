@@ -4,7 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const UPDATE_CHECK = require('../lib/update-check');
 const { isNewer, decideUpdatePlan } = require('../lib/updater');
-const { isVersionSupported, describeSupportRange } = require('../lib/dsh-adapter');
+const {
+  isVersionSupported,
+  describeSupportRange,
+  readDshVersion
+} = require('../lib/dsh-adapter');
 const { runContractCheck } = require('../lib/upstream-contract');
 
 function createUpdateFlow({
@@ -26,6 +30,55 @@ function createUpdateFlow({
   })
 }) {
   let inFlight = false;
+  const lastGoodPath = path.join(path.dirname(localRuntimeDir), 'last-good-core.json');
+
+  function readLastGood() {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(lastGoodPath, 'utf8'));
+      return parsed && typeof parsed.version === 'string' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeLastGood(version) {
+    if (!version) return;
+    try {
+      fs.mkdirSync(path.dirname(lastGoodPath), { recursive: true });
+      fs.writeFileSync(
+        lastGoodPath,
+        `${JSON.stringify({ version, verifiedAt: new Date().toISOString() }, null, 2)}\n`
+      );
+    } catch (err) {
+      console.warn(`[hot-update] 写入 last-good 记录失败: ${err.message}`);
+    }
+  }
+
+  async function restoreLastGood(nodeExe, pnpmCjs, lastGood) {
+    try {
+      fs.mkdirSync(localRuntimeDir, { recursive: true });
+      const pkgJsonPath = path.join(localRuntimeDir, 'package.json');
+      if (!fs.existsSync(pkgJsonPath)) {
+        fs.writeFileSync(
+          pkgJsonPath,
+          JSON.stringify({ name: 'dsh-local-hot-update', version: '0.0.0', private: true }, null, 2)
+        );
+      }
+      hooks.setWindowProgress(t('dialog.progress.restoreLastGood', { version: lastGood.version }));
+      const restored = await preset.runPnpmAdd(nodeExe, pnpmCjs, [`@deepseek-ai/dsh@${lastGood.version}`]);
+      if (!restored) {
+        console.warn('[hot-update] last-good 版本恢复失败');
+        return false;
+      }
+      hooks.setForceBundledRuntime(false);
+      hooks.resetLocalRuntimeBrokenUntil();
+      await hooks.restartWithCurrentConfig();
+      return true;
+    } catch (err) {
+      console.warn(`[hot-update] 恢复 last-good 出错: ${err.message}`);
+      return false;
+    }
+  }
 
   function quarantineLocalRuntime(reason) {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -94,12 +147,23 @@ function createUpdateFlow({
     const verdict = await verifyRuntime(localRuntimeDir);
     if (!verdict || !verdict.ok) {
       const reason = describeVerdict(verdict);
+      const lastGood = readLastGood();
       quarantineLocalRuntime(reason);
+      if (lastGood && lastGood.version && lastGood.version !== targetVersion) {
+        const restored = await restoreLastGood(nodeExe, pnpmCjs, lastGood);
+        if (restored) {
+          throw new Error(t('error.hotUpdateRolledBackToLastGood', {
+            version: lastGood.version,
+            reason
+          }));
+        }
+      }
       hooks.setForceBundledRuntime(true);
       hooks.resetLocalRuntimeBrokenUntil();
       await hooks.restartWithCurrentConfig();
       throw new Error(t('error.hotUpdateIncompatible', { reason }));
     }
+    writeLastGood(targetVersion || readDshVersion(localRuntimeDir));
 
     const markerFile = path.join(localRuntimeDir, '.broken-marker.json');
     if (fs.existsSync(markerFile)) {

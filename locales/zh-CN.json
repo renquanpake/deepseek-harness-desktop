@@ -138,7 +138,8 @@
     "progress": {
       "hotUpdateCore": "正在通过国内镜像热更新 DSH 内核...",
       "syncPresets": "正在同步出厂预置插件（{count} 项）...",
-      "verifyCore": "正在验证新内核的启动与认证契约..."
+      "verifyCore": "正在验证新内核的启动与认证契约...",
+      "restoreLastGood": "正在恢复到上次验证通过的内核 {version}..."
     },
     "backgroundClose": {
       "title": "隐藏到系统托盘",
@@ -209,6 +210,7 @@
     "hotUpdateNodeMissing": "内置 node.exe 或 pnpm.cjs 缺失，无法执行内核热更新",
     "hotUpdateFailed": "DSH 内核热更新失败，请检查网络或稍后重试",
     "hotUpdateUnsupported": "内核 {version} 超出已验证范围（{range}），已拒绝热更新。请先更新外壳版本。",
-    "hotUpdateIncompatible": "新内核未通过兼容性验证（{reason}），已隔离并回退到出厂内核。"
+    "hotUpdateIncompatible": "新内核未通过兼容性验证（{reason}），已隔离并回退到出厂内核。",
+    "hotUpdateRolledBackToLastGood": "新内核未通过验证，已回退到上次验证通过的内核 {version}（{reason}）。"
   }
 }
