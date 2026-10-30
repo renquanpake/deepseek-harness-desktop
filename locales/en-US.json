@@ -27,7 +27,8 @@
       "winNative": "Engine: Windows Native Mode (Recommended, Fastest)",
       "wsl2": "Engine: WSL2 Compatibility Mode (For Linux-Dependent Tools)",
       "safeMode": "Troubleshooting Safe Mode (Temporarily Disable Third-Party Plugins)",
-      "restorePresets": "Restore Factory Preset Plugins (Reset UI Enhancement Components)"
+      "restorePresets": "Restore Factory Preset Plugins (Reset UI Enhancement Components)",
+      "updateShell": "Update shell code (git pull)"
     },
     "system": {
       "title": "Windows System Integration",
@@ -171,6 +172,22 @@
     "workspace": {
       "title": "Open workspace",
       "openFailed": "Failed to open workspace: {message}"
+    },
+    "shellCodeUpdate": {
+      "title": "Update shell code",
+      "confirm": "Pull the latest shell code and reinstall dependencies?",
+      "detail": "Current branch: {branch}. This runs git pull --ff-only and npm ci, then asks you to restart.",
+      "update": "Update",
+      "unchanged": "Shell code is already up to date.",
+      "updated": "Shell updated to {head}; restart to apply.",
+      "restartNow": "Restart now",
+      "later": "Later",
+      "notRepo": "This directory is not a Git checkout, so it cannot update itself. Re-run the deployment script.",
+      "dirty": "The worktree has uncommitted changes (branch {branch}); update aborted.",
+      "pullFailed": "Pull failed; the current code is unchanged.",
+      "installFailed": "Dependency installation failed.",
+      "rolledBack": "Rolled back to the previous commit and restored dependencies.",
+      "failed": "Update failed."
     }
   },
   "notify": {

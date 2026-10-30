@@ -1,6 +1,6 @@
 # 故障排查
 
-本文适用于 `DeepSeek Harness` 0.3.4 桌面外壳。命令以 Windows 默认安装为例；便携模式请把 `%USERPROFILE%\.dsh` 替换为 `<程序目录>\portable-data\.dsh`。
+本文适用于 `DeepSeek Harness` 0.3.5 桌面外壳。命令以 Windows 默认安装为例；便携模式请把 `%USERPROFILE%\.dsh` 替换为 `<程序目录>\portable-data\.dsh`。
 
 菜单栏默认自动隐藏，按 `Alt` 可显示。应用内菜单名为「引擎与更新」；部分历史弹窗文案仍写作「引擎与救援」，指向同一个菜单。
 
@@ -390,6 +390,16 @@ wsl.exe -- bash -lc "curl -I http://127.0.0.1:3080"
 - 想升级内核：先更新外壳代码，测试通过后由维护者抬高范围上限。
 - 手动体检：`node scripts/check-runtime-compat.js`。
 - 端到端确认内核行为：`npm run check:upstream -- --runtime-dir .\dsh-runtime`，会真实启动内核并验证认证 URL、401 与 Web 外壳。
+
+## 7.3 遇到兼容性报错的处理顺序
+
+1. 先跑体检：`node scripts/check-runtime-compat.js`，确认内核版本与入口是否正常。
+2. 再跑契约检查：`npm run check:upstream -- --runtime-dir .\dsh-runtime`，看是认证 URL、401、Cookie 还是外壳页面这一步失败。
+3. 应用内「引擎与更新」→「更新外壳代码（git pull）」：拉取最新的适配层修复，重启后再试。
+4. 还不行就固定内核：`set DSH_VERSION=<已知可用版本>` 后 `npm run runtime:prepare`，先用旧内核恢复工作。
+5. 应用已经起不来时，直接重新运行 `一键部署.bat`，或在部署目录执行 `git pull` 与 `npm ci`。
+
+自动化的边界：外壳能自己拉取修复代码，但不能凭空生成适配逻辑。上游变更需要维护者先更新 `lib/dsh-adapter.js` 并推送，用户侧再通过上面的步骤拿到。
 
 ## 8. 自愈流程
 

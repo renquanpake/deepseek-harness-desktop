@@ -56,6 +56,7 @@ const { createWinUserPath } = require('./lib/win-user-path');
 const { ensureKeybindingFile } = require('./lib/keybindings');
 const { createCspViolationSink, isCspViolationMessage } = require('./lib/csp-report');
 const { createWorkspaceStore } = require('./lib/workspace-store');
+const { createShellUpdater } = require('./lib/shell-updater');
 const { createIpcActions } = require('./src/ipc-actions');
 const { createRestartController } = require('./src/app-restart');
 const { createShortcutController } = require('./src/shortcuts');
@@ -142,6 +143,7 @@ const loadKeybindings = () => ensureKeybindingFile(KEYBINDINGS_PATH);
 const CRASH_REPORT_DIR = path.join(USER_DATA_DIR, 'crash-reports');
 const operationLog = createOperationLog({ dir: path.join(USER_DATA_DIR, 'logs') });
 const BACKEND_CSP_MODE = normalizeCspMode(process.env.DSH_BACKEND_CSP || 'report');
+const shellUpdater = createShellUpdater({ appDir: __dirname });
 const workspaceStore = createWorkspaceStore({
   filePath: path.join(USER_DATA_DIR, 'recent-workspaces.json')
 });
@@ -619,6 +621,24 @@ const uiMenus = createUiMenus({
     getDshHome: () => DSH_HOME,
     getCrashReportDir: () => CRASH_REPORT_DIR,
     openKeybindingFile: () => shell.openPath(KEYBINDINGS_PATH),
+    getShellUpdateStatus: async () => {
+      try {
+        return await shellUpdater.status();
+      } catch (err) {
+        return { supported: false, reason: 'exception', message: err.message };
+      }
+    },
+    updateShell: async () => {
+      try {
+        return await shellUpdater.update();
+      } catch (err) {
+        return { ok: false, reason: 'exception', message: err.message };
+      }
+    },
+    relaunchApp: () => {
+      app.relaunch();
+      app.exit(0);
+    },
     getRecentWorkspaces: () => workspaceStore.list(),
     openWorkspaceDialog,
     switchToWorkspace,

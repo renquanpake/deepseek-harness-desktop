@@ -27,7 +27,8 @@
       "winNative": "运行引擎：Windows 原生模式 (推荐，速度最快)",
       "wsl2": "运行引擎：WSL2 兼容模式 (适用于 Linux 依赖工具)",
       "safeMode": "故障排查安全模式 (临时禁用第三方插件)",
-      "restorePresets": "恢复出厂预置插件 (重置界面增强组件)"
+      "restorePresets": "恢复出厂预置插件 (重置界面增强组件)",
+      "updateShell": "更新外壳代码（git pull）"
     },
     "system": {
       "title": "Windows 系统集成",
@@ -171,6 +172,22 @@
     "workspace": {
       "title": "打开工作区",
       "openFailed": "打开工作区失败：{message}"
+    },
+    "shellCodeUpdate": {
+      "title": "更新外壳代码",
+      "confirm": "从仓库拉取最新外壳代码并重装依赖？",
+      "detail": "当前分支：{branch}。更新会执行 git pull --ff-only 与 npm ci，完成后需要重启应用。",
+      "update": "开始更新",
+      "unchanged": "外壳代码已是最新。",
+      "updated": "外壳已更新到 {head}，需要重启生效。",
+      "restartNow": "立即重启",
+      "later": "稍后",
+      "notRepo": "当前目录不是 Git 仓库，无法自动更新。请重新运行一键部署脚本。",
+      "dirty": "工作区有未提交改动（分支 {branch}），为避免冲突已中止。",
+      "pullFailed": "拉取失败，当前代码保持不变。",
+      "installFailed": "依赖安装失败。",
+      "rolledBack": "已回滚到更新前的提交并恢复依赖。",
+      "failed": "更新失败。"
     }
   },
   "notify": {
