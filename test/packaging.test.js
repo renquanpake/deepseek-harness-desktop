@@ -60,3 +60,64 @@ test('prepare-python-runtime CLI creates the runtime subdir before installing', 
   const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'prepare-python-runtime.js'), 'utf8');
   assert.match(src, /mkdirSync\(path\.join\(options\.runtimeDir,\s*RUNTIME_SUBDIR\)/);
 });
+
+test('build config targets Windows only', () => {
+  const root = path.join(__dirname, '..');
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const winTargets = pkg.build.win.target.map((entry) => entry.target);
+  assert.ok(winTargets.includes('nsis'), 'Windows must ship an NSIS installer');
+  assert.deepStrictEqual(pkg.build.win.target[0].arch, ['x64']);
+  assert.strictEqual(pkg.build.mac, undefined, 'macOS targets are out of scope');
+  assert.strictEqual(pkg.build.linux, undefined, 'Linux targets are out of scope');
+  assert.strictEqual(pkg.scripts['dist:mac'], undefined);
+  assert.strictEqual(pkg.scripts['dist:linux'], undefined);
+});
+
+test('build workflow builds and verifies the Windows package', () => {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', '.github', 'workflows', 'build.yml'),
+    'utf8'
+  );
+  assert.match(workflow, /build-windows:/);
+  assert.doesNotMatch(workflow, /build-macos:/);
+  assert.doesNotMatch(workflow, /build-linux:/);
+  assert.match(workflow, /verify-packaging\.js --asar dist\/win-unpacked\/resources\/app\.asar/);
+  assert.match(workflow, /needs: \[ build-windows \]/);
+});
+
+test('splash.html ships a restrictive CSP and no remote assets', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'splash.html'), 'utf8');
+  assert.match(html, /http-equiv="Content-Security-Policy"/);
+  assert.match(html, /default-src 'none'/);
+  assert.match(html, /connect-src 'none'/);
+  assert.doesNotMatch(html, /(src|href)="https?:\/\//, 'splash.html must not load remote assets');
+});
+
+test('build.files covers every runtime entry required by the main process', () => {
+  const { collectRequiredEntries, findUncoveredEntries } = require('../scripts/verify-packaging');
+  const missing = findUncoveredEntries();
+  assert.deepStrictEqual(
+    missing.map((item) => item.entry),
+    [],
+    'build.files must ship every module and asset the shell loads at runtime'
+  );
+  const entries = collectRequiredEntries().map((item) => item.entry);
+  assert.ok(entries.includes('src/ipc.js'), 'src/ modules must be treated as runtime requirements');
+  assert.ok(entries.includes('locales'), 'locales must be treated as a runtime requirement');
+});
+
+test('build.files ships the src and locales directories', () => {
+  const root = path.join(__dirname, '..');
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  assert.ok(pkg.build.files.includes('src/'), 'build.files must include src/');
+  assert.ok(pkg.build.files.includes('locales/'), 'build.files must include locales/');
+});
+
+test('packaging coverage matcher handles directory, exact and glob patterns', () => {
+  const { isCovered } = require('../scripts/verify-packaging');
+  assert.ok(isCovered('src/ipc.js', ['src/']));
+  assert.ok(isCovered('locales', ['locales/']));
+  assert.ok(isCovered('splash.html', ['splash.html']));
+  assert.ok(isCovered('dsh-runtime/python/x.py', ['dsh-runtime/python/**']));
+  assert.strictEqual(isCovered('src/ipc.js', ['lib/', 'main.js']), false);
+});

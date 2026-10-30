@@ -9,7 +9,8 @@ const {
   isNewer,
   decideUpdatePlan,
   downloadWithProxies,
-  verifyInstallerIntegrity
+  verifyInstallerIntegrity,
+  resolveInstallerFileName
 } = require('../lib/updater');
 
 function createUpdateFlow({
@@ -56,7 +57,9 @@ function createUpdateFlow({
     }
     const markerFile = path.join(localRuntimeDir, '.broken-marker.json');
     if (fs.existsSync(markerFile)) {
-      try { fs.unlinkSync(markerFile); } catch {}
+      try { fs.unlinkSync(markerFile); } catch {
+    /* 尽力而为：失败不阻断主流程 */
+  }
     }
     hooks.setForceBundledRuntime(false);
     hooks.resetLocalRuntimeBrokenUntil();
@@ -207,9 +210,18 @@ function createUpdateFlow({
           });
           hooks.clearWindowProgress();
         } else {
-          const tmpDir = os.tmpdir();
-          const installerName = `${path.basename(release.installerUrl).split('?')[0] || 'DeepSeek-Harness-Desktop-Setup.exe'}`;
-          const installerPath = path.join(tmpDir, installerName);
+          const installerName = resolveInstallerFileName(release.installerUrl);
+          if (!installerName) {
+            hooks.clearWindowProgress();
+            dialog.showErrorBox(
+              t('error.integrityCheckFailed'),
+              t('error.integrityCheckFailedMessage', { reason: 'installer-name-rejected' })
+            );
+            return;
+          }
+          const installerDir = path.join(os.tmpdir(), 'dsh-shell-update');
+          fs.mkdirSync(installerDir, { recursive: true });
+          const installerPath = path.join(installerDir, installerName);
           hooks.setWindowProgress(t('dialog.progress.downloadShell', { percent: 0 }));
           await downloadWithProxies(release.installerUrl, installerPath, (percent) => {
             hooks.setWindowProgress(t('dialog.progress.downloadShell', { percent }));
@@ -260,6 +272,11 @@ function createUpdateFlow({
               }
             } catch (lockErr) {
               console.warn(`[shell-update] 释放单实例锁失败: ${lockErr.message}`);
+            }
+            if (!/\.exe$/i.test(installerPath)) {
+              dialog.showErrorBox(t('error.nsisInstallFailed'), 'refusing to run a non-exe installer');
+              hooks.clearWindowProgress();
+              return;
             }
             try {
               const installer = spawn(installerPath, [], { detached: true, stdio: 'ignore' });

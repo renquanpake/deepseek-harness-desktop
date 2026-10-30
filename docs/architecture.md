@@ -16,21 +16,34 @@
 
 ### 2.1 结构与加载方式
 
-`main.js` 是组合根（portable 路径引导、`dsh-app` 协议安装、窗口创建、`whenReady` 编排），其余能力已按职责拆分到 `src/` 与 `lib/`：
+`main.js` 是组合根（状态持有、依赖装配、`whenReady` 编排），其余能力已按职责拆分到 `src/` 与 `lib/`：
 
 | 模块 | 职责 |
 | --- | --- |
 | `src/backend.js` | 后端子进程启动/终止、崩溃重启决策接线、local-runtime 启动看门狗与熔断 |
+| `src/app-window.js` | 主窗口选项、启动页加载、新窗口/导航/加载失败/关闭事件绑定 |
+| `src/protocol-setup.js` | `dsh-app` 协议注册与 CSP 注入、后端主文档响应头加固 |
+| `src/portable-paths.js` | 便携数据根探测、子目录与 `.gitconfig` 准备、DSH_HOME 与环境叠加 |
+| `src/security.js` | 会话权限默认拒绝、麦克风白名单、webview 挂载拦截 |
+| `src/quit-confirmation.js` | 首次隐藏确认、退出前后端状态确认 |
+| `lib/workspace-store.js` | 最近工作区持久化与去重 |
+| `lib/update-trust.js` | 更新清单 Ed25519 验签与信任配置 |
+| `lib/cli-install.js`、`lib/win-user-path.js` | `dsh` 命令安装与用户 PATH 读写 |
+| `lib/crash-reporter.js`、`lib/operation-log.js` | 崩溃报告与操作日志 |
+| `lib/keybindings.js` | 快捷键配置读写与校验 |
 | `src/ui-menus.js` | 托盘、原生应用菜单、自修复入口 |
 | `src/update-flow.js` | 更新检查编排、回退出厂运行时、旧损坏目录清理 |
 | `src/ipc.js` | 全部 IPC handler 集中注册（含无参通道白名单） |
+| `src/ipc-actions.js` | IPC 动作实现与依赖注入（运行时信息、引擎切换、自愈、worktree 对话框等） |
+| `src/app-restart.js` | 后端重启编排：端口选择、就绪等待、鉴权 URL 等待、协议重装 |
+| `src/shortcuts.js` | 全局快捷键注册、占用回退与热重载 |
 | `src/worktree.js` | git worktree 隔离会话管理 |
 | `src/runtime-layout.js` | runtime 目录布局与版本探测 |
 | `src/preset-plugins.js` | 预置插件水合 |
 | `src/clipboard.js` | 剪贴板桥接 |
 | `lib/context-menu.js`、`lib/update-check.js` | 右键菜单注册、更新检测纯逻辑 |
 
-拆分模块统一采用依赖注入工厂（`createXxx(deps)`），Electron 与 main 状态经 getter/回调注入，行为与单体版本等价。`createMainWindow` 位于 `main.js`，其关键行为如下：
+拆分模块统一采用依赖注入工厂（`createXxx(deps)`），Electron 与 main 状态经 getter/回调注入，行为与单体版本等价。窗口由 `src/app-window.js` 的 `createWindowFactory` 创建，关键行为如下：
 
 - `BrowserWindow` 使用 `preload.js`，并开启 `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`、`webviewTag: false`。
 - 启动页默认 `loadFile('splash.html')`；设置 `DSH_ENABLE_APP_PROTOCOL=true` 时改用 `dsh-app://app/splash.html`。
@@ -43,7 +56,10 @@
 
 ```mermaid
 graph TD
-  MAIN["main.js 组合根"] --> WIN["createMainWindow"]
+  MAIN["main.js 组合根"] --> WIN["src/app-window.js"]
+  MAIN --> PROTO["src/protocol-setup.js"]
+  MAIN --> PORT["src/portable-paths.js"]
+  MAIN --> SEC["src/security.js"]
   MAIN --> BE["src/backend.js"]
   MAIN --> UI["src/ui-menus.js"]
   MAIN --> UP["src/update-flow.js"]
@@ -70,9 +86,11 @@ graph TD
 
 - 渲染层页面来源默认仍是后端 HTTP 地址；`dsh-app://` 本地来源已具备能力但受 `DSH_ENABLE_APP_PROTOCOL` 门控。
 - 后端页面与桌面桥接处于同一窗口，页面来源即后端来源。
-- `dsh-app` 响应已统一注入 CSP；后端 HTTP 页面的 CSP 仍取决于后端自身。
+- `dsh-app` 响应已统一注入完整 CSP；后端 HTTP 主文档由外壳通过 `session.webRequest.onHeadersReceived` 补 `object-src 'none'`、`base-uri 'self'`、`frame-ancestors 'none'` 三条收敛指令。
+- 后端主文档另有严格策略上报通道：`DSH_BACKEND_CSP=report`（默认）下发 `Content-Security-Policy-Report-Only`，`enforce` 改为强制下发的第二条策略，`off` 关闭。违规信息经渲染进程 console 过滤后写入操作日志的 `csp-violation` 记录，为后续默认强制收紧提供依据。
 - 本地资源路径校验：`dsh-app` 使用通用静态根目录约束与路径穿越防护；`file://` 启动页仍用精确路径判断。
 - 全部 19 个入站 IPC handler 已接入 `lib/ipc-schema.js` 集中参数契约校验。
+- 会话权限默认拒绝，仅允许主窗口 `dsh-app` 同源文档的纯音频请求；`web-contents-created` 统一拦截 `will-attach-webview`。
 
 ## 3. 目标架构
 
@@ -161,7 +179,7 @@ sequenceDiagram
 | 静态资源 | 无独立资源根 | `appRoot` 前缀校验，目录回退 `index.html` |
 | 路径穿越 | 仅启动页精确路径判断 | 拒绝 `..`、编码穿越、绝对路径、盘符路径、符号链接越界 |
 | 协议权限 | 无自定义协议 | `standard`、`secure`、`supportFetchAPI`、`corsEnabled` |
-| CSP | 外壳未统一注入 | `script-src 'self'`、受控 `connect-src`、`frame-ancestors 'none'` |
+| CSP | `dsh-app` 完整策略；后端文档补 `object-src`/`base-uri`/`frame-ancestors` | `script-src 'self'`、受控 `connect-src`、`frame-ancestors 'none'` |
 | API 访问 | 渲染层直连后端 | 协议内 `/api/` 代理，来源收敛 |
 | preload | 22 个方法平铺 | 窄桥接分组 |
 | IPC | 逐处理函数校验 | 集中契约 + 发送方校验 |
@@ -169,7 +187,7 @@ sequenceDiagram
 ## 4. 接入 main.js 所需步骤
 
 1. ✅ 在 `app.whenReady` 之前调用 `registerAppSchemePrivileges(protocol)`，确保 `dsh-app` 获得标准、安全、可 fetch、支持 CORS 的协议权限。（已实现：模块加载期顶层调用）
-2. ⏳ 确认构建产物目录并作为 `appRoot`，同时把该目录加入 `package.json` 的打包文件清单；当前 `build.files` 只包含 `main.js`、`preload.js`、`splash.html`、`lib/`、`build/`、`dsh-runtime/`。（现以模块目录为 `appRoot`，静态服务能力已可用；`index.html` 待内核前端产物本地化后纳入）
+2. ⏳ 确认构建产物目录并作为 `appRoot`，同时把该目录加入 `package.json` 的打包文件清单；当前 `build.files` 已包含 `main.js`、`preload.js`、`splash.html`、`lib/`、`src/`、`locales/`、`package.json`、`build/`、`dsh-runtime/`。（现以模块目录为 `appRoot`，静态服务能力已可用；`index.html` 待内核前端产物本地化后纳入）
 3. ✅ 在 `app.whenReady` 之后调用 `createAppProtocolHandler({ protocol, net, appRoot, backendOrigin, registerPrivileges: false })`，`backendOrigin` 使用当前后端地址。（已实现：`installAppProtocolHandler`；`DSH_ENABLE_APP_PROTOCOL=true` 时启用）
 4. ✅ 后端地址同步：`setWindowOpenHandler` 维持后端 HTTP 白名单，`will-navigate` 已增加 `isAppUrl` 判定；启动 splash 在开关开启时改用 `dsh-app://app/splash.html`；后端每次就绪后重装 handler 以刷新 `backendOrigin`。渲染主界面 `loadURL('dsh-app://app/')` 切换待步骤 2 完成。
 5. ✅ CSP：`dsh-app` 响应经封装 handler 注入 `buildCsp({ backendOrigin, dev })` 头（等价于 `onHeadersReceived`，实现更贴近协议层）。
@@ -181,5 +199,5 @@ sequenceDiagram
 
 - `node --test test/app-protocol.test.js`：19 个用例通过。
 - `node --test test/app-protocol-integration.test.js`：主进程接线静态断言通过。
-- `npm test`：156 个用例全部通过。
-- 协议模块已通过 `DSH_ENABLE_APP_PROTOCOL` 接入主进程；默认关闭时运行时仍按原有 HTTP 直接加载方式，行为与 0.2.1 基线一致。
+- `npm test`：以实际执行结果为准，当前为 297 个用例全部通过（另有 3 条 Electron e2e）。
+- 协议模块已通过 `DSH_ENABLE_APP_PROTOCOL` 接入主进程；默认关闭时运行时仍按原有 HTTP 直接加载方式，行为与 0.3.0 基线一致。

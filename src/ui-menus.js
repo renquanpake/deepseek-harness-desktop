@@ -4,7 +4,6 @@ const fs = require('fs');
 const path = require('path');
 
 function createUiMenus({
-  app,
   dialog,
   shell,
   Menu,
@@ -14,23 +13,26 @@ function createUiMenus({
   getMainWindow,
   isWindowsPlatform,
   getState,
+  getKeybindings,
   setEngine,
   setSafeMode,
-  setQuitting,
   actions
 }) {
   let tray = null;
 
   function getTrayIconPath(appDir) {
+    const resourcesPath = typeof process.resourcesPath === 'string' ? process.resourcesPath : null;
     const candidates = [
       path.join(appDir, 'build', 'icon.png'),
-      path.join(process.resourcesPath, 'icon.png'),
-      path.join(process.resourcesPath, 'build', 'icon.png')
-    ];
+      resourcesPath ? path.join(resourcesPath, 'icon.png') : null,
+      resourcesPath ? path.join(resourcesPath, 'build', 'icon.png') : null
+    ].filter(Boolean);
     for (const p of candidates) {
       try {
         if (fs.existsSync(p)) return p;
-      } catch {}
+      } catch {
+    /* 尽力而为：失败不阻断主流程 */
+  }
     }
     return null;
   }
@@ -67,8 +69,7 @@ function createUiMenus({
         {
           label: t('tray.quit'),
           click: () => {
-            setQuitting();
-            app.quit();
+            actions.requestQuit();
           }
         }
       ]);
@@ -139,6 +140,45 @@ function createUiMenus({
             }
           },
           {
+            label: t('menu.studio.openWorkspace'),
+            click: async () => {
+              const result = await actions.openWorkspaceDialog();
+              if (result && result.ok === false) {
+                dialog.showMessageBox(getMainWindow(), {
+                  type: 'error',
+                  title: t('dialog.workspace.title'),
+                  message: t('dialog.workspace.openFailed', { message: result.error || '' })
+                });
+              }
+            }
+          },
+          {
+            label: t('menu.studio.recentWorkspaces'),
+            submenu: (() => {
+              const current = getState().workspaceDir;
+              const recents = actions.getRecentWorkspaces();
+              if (!recents.length) {
+                return [{ label: t('menu.studio.recentEmpty'), enabled: false }];
+              }
+              return recents.map((entry) => ({
+                label: entry.path === current
+                  ? `${entry.name}  ${t('menu.studio.recentCurrent')}`
+                  : `${entry.name} — ${entry.path}`,
+                click: () => {
+                  actions.switchToWorkspace(entry.path);
+                }
+              }));
+            })()
+          },
+          {
+            label: t('menu.studio.removeRecent'),
+            click: () => {
+              actions.removeRecentWorkspace(getState().workspaceDir);
+              buildNativeAppMenu();
+            }
+          },
+          { type: 'separator' },
+          {
             label: t('menu.studio.pasteClipboard'),
             accelerator: 'Alt+Shift+V',
             click: () => {
@@ -166,8 +206,7 @@ function createUiMenus({
           {
             label: t('menu.app.quit'),
             click: () => {
-              setQuitting();
-              app.quit();
+              actions.requestQuit();
             }
           }
         ]
@@ -324,11 +363,67 @@ function createUiMenus({
             click: () => shell.openPath(actions.getDshHome())
           },
           {
+            label: t('menu.system.openCrashReports'),
+            click: () => shell.openPath(actions.getCrashReportDir())
+          },
+          ...(isWindowsPlatform() ? [
+            { type: 'separator' },
+            {
+              label: t('menu.system.installCli'),
+              click: async () => {
+                const result = await actions.installCli();
+                dialog.showMessageBox(getMainWindow(), {
+                  type: result.ok ? 'info' : 'error',
+                  title: t('dialog.cliInstall.title'),
+                  message: result.ok
+                    ? t('dialog.cliInstall.success', { path: result.binDir })
+                    : t('dialog.cliInstall.failure', { reason: result.reason }),
+                  detail: result.ok ? t('dialog.cliInstall.detail') : undefined
+                });
+              }
+            },
+            {
+              label: t('menu.system.removeCli'),
+              click: async () => {
+                const result = await actions.removeCli();
+                dialog.showMessageBox(getMainWindow(), {
+                  type: result.ok ? 'info' : 'error',
+                  title: t('dialog.cliRemove.title'),
+                  message: result.ok
+                    ? t('dialog.cliRemove.success')
+                    : t('dialog.cliRemove.failure', { reason: result.reason })
+                });
+              }
+            }
+          ] : []),
+          {
             label: t('menu.system.openDevTools'),
-            accelerator: 'F12',
+            accelerator: getKeybindings().toggleDevTools,
             click: () => {
               const activeWindow = getMainWindow();
               if (activeWindow) activeWindow.webContents.toggleDevTools();
+            }
+          },
+          { type: 'separator' },
+          {
+            label: t('menu.system.openKeybindings'),
+            click: () => {
+              actions.openKeybindingFile();
+            }
+          },
+          {
+            label: t('menu.system.reloadKeybindings'),
+            click: async () => {
+              const result = await actions.reloadKeybindings();
+              const invalid = result.errors && result.errors.length > 0;
+              dialog.showMessageBox(getMainWindow(), {
+                type: invalid ? 'warning' : 'info',
+                title: t('dialog.keybindings.title'),
+                message: invalid
+                  ? t('dialog.keybindings.invalid')
+                  : t('dialog.keybindings.reloaded', { shortcut: result.registered || t('dialog.keybindings.unavailable') }),
+                detail: invalid ? result.errors.join('\n') : undefined
+              });
             }
           }
         ]

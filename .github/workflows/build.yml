@@ -1,4 +1,4 @@
-name: Build Windows Release
+name: Build and Release
 
 on:
   push:
@@ -8,12 +8,20 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-jobs:
-  build:
-    runs-on: windows-latest
-    permissions:
-      contents: write
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
+permissions:
+  contents: write
+
+env:
+  CI: true
+  DSH_VERSION: 0.1.0-rc.6
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,53 +30,131 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci --no-audit --no-fund
 
-      - name: Prepare DSH runtime & patches
+      - name: Verify packaging manifest covers runtime entries
+        run: node scripts/verify-packaging.js
+
+      - name: Run test suite with coverage gate
+        run: npm run test:coverage
+
+  build-windows:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "tag $env:GITHUB_REF_NAME does not match package.json version v$version"
+          }
+          Write-Host "tag $env:GITHUB_REF_NAME matches package version v$version"
+
+      - name: Prepare DSH runtime
         run: npm run runtime:prepare
-
-      - name: Run test suite
-        run: npm test
 
       - name: Build Windows installer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --publish never
 
-      - name: Generate SHA256SUMS
-        id: checksums
-        shell: pwsh
-        run: |
-          $files = Get-ChildItem -Path dist -Recurse -Include *.exe,*.zip -File |
-            Where-Object { $_.Name -notlike '*.blockmap' }
-          $lines = foreach ($f in $files) {
-            $hash = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash.ToLower()
-            "$hash  $($f.Name)"
-          }
-          $lines | Set-Content -Path dist/SHA256SUMS.txt -Encoding UTF8
-          $sums = [string]::Join("`n", $lines)
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "sums<<EOF"
-          Add-Content -Path $env:GITHUB_OUTPUT -Value $sums
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "EOF"
+      - name: Verify packaged app contains runtime entry points
+        run: node scripts/verify-packaging.js --asar dist/win-unpacked/resources/app.asar
 
-      - name: Upload Windows Setup Artifact
+      - name: Sign update manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          UPDATE_MANIFEST_KEY: ${{ secrets.UPDATE_MANIFEST_KEY }}
+        run: |
+          if (-not $env:UPDATE_MANIFEST_KEY) {
+            Write-Host "UPDATE_MANIFEST_KEY is not configured; publishing an unsigned manifest."
+            exit 0
+          }
+          $installer = Get-ChildItem -Path dist -Filter *.exe -File | Select-Object -First 1
+          if (-not $installer) { throw "installer not found in dist" }
+          $version = node -p "require('./package.json').version"
+          $keyFile = Join-Path $env:RUNNER_TEMP 'update-signing-key.pem'
+          Set-Content -Path $keyFile -Value $env:UPDATE_MANIFEST_KEY -NoNewline -Encoding ascii
+          try {
+            node scripts/sign-update-manifest.js `
+              --tag $env:GITHUB_REF_NAME `
+              --version $version `
+              --installer $installer.FullName `
+              --repo $env:GITHUB_REPOSITORY `
+              --key $keyFile `
+              --public-key build/update-public-key.pem `
+              --out dist/latest.json
+          } finally {
+            Remove-Item $keyFile -Force -ErrorAction SilentlyContinue
+          }
+          if (-not (Test-Path dist/latest.json)) { throw "signed manifest was not produced" }
+
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: DeepSeek-Harness-Windows-Setup
+          name: dist-windows
           path: |
             dist/*.exe
-            dist/SHA256SUMS.txt
+            dist/*.blockmap
+            dist/*.yml
+            dist/latest.json
+          if-no-files-found: error
 
-      - name: Publish Official GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+  release:
+    needs: [ build-windows ]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        id: checksums
+        shell: bash
+        run: |
+          cd dist
+          shopt -s nullglob
+          files=( *.exe )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No release binaries found" >&2
+            exit 1
+          fi
+          sha256sum "${files[@]}" | tee SHA256SUMS.txt
+          {
+            echo "sums<<EOF"
+            cat SHA256SUMS.txt
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.exe
-            dist/*.zip
-            dist/latest.yml
+            dist/*.yml
+            dist/latest.json
             dist/SHA256SUMS.txt
           body: |
             ### SHA-256 Checksums

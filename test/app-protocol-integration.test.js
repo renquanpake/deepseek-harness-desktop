@@ -6,6 +6,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+const protocolSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'protocol-setup.js'), 'utf8');
+const restartSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'app-restart.js'), 'utf8');
+const windowSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'app-window.js'), 'utf8');
 const trustedSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'trusted-url.js'), 'utf8');
 
 test('main.js registers dsh-app privileges before app.whenReady', () => {
@@ -17,18 +20,21 @@ test('main.js registers dsh-app privileges before app.whenReady', () => {
   assert.ok(registerIndex < readyIndex, 'privileges must be registered before whenReady usage');
 });
 
-test('main.js installs protocol handler gated by DSH_ENABLE_APP_PROTOCOL', () => {
+test('protocol setup installs the handler gated by DSH_ENABLE_APP_PROTOCOL', () => {
   assert.match(mainSrc, /DSH_ENABLE_APP_PROTOCOL/);
-  assert.match(mainSrc, /function installAppProtocolHandler\(\) \{\s*\n\s*if \(!ENABLE_APP_PROTOCOL\) return;/);
-  assert.match(mainSrc, /createAppProtocolHandler\(\{/);
-  assert.match(mainSrc, /registerPrivileges: false/);
-  assert.match(mainSrc, /headers\.set\('content-security-policy', csp\)/);
+  assert.match(mainSrc, /appProtocolEnabled: ENABLE_APP_PROTOCOL/);
+  assert.match(protocolSrc, /if \(!appProtocolEnabled\) return false;/);
+  assert.match(protocolSrc, /createAppProtocolHandler\(\{/);
+  assert.match(protocolSrc, /registerPrivileges: false/);
+  assert.match(protocolSrc, /headers\.set\('content-security-policy', csp\)/);
 });
 
-test('main.js refreshes protocol origin after backend ready and guards navigation', () => {
-  assert.match(mainSrc, /if \(ready\) installAppProtocolHandler\(\);/);
-  assert.match(mainSrc, /will-navigate[\s\S]{0,120}isAppUrl\(url\)/);
-  assert.match(mainSrc, /loadURL\(`\$\{APP_SCHEME\}:\/\/\$\{APP_HOST\}\/splash\.html`\)/);
+test('protocol origin refreshes after backend ready and the window guards navigation', () => {
+  assert.match(mainSrc, /installAppProtocol: \(\) => protocolSetup\.installAppProtocol\(\)/);
+  assert.match(restartSrc, /if \(ready\) installAppProtocol\(\);/);
+  assert.match(mainSrc, /getBackendOrigin: \(\) => \{/);
+  assert.match(windowSrc, /will-navigate[\s\S]{0,160}isAppUrl\(url\)/);
+  assert.match(windowSrc, /loadURL\(`\$\{appScheme\}:\/\/\$\{appHost\}\/splash\.html`\)/);
 });
 
 test('trusted-url accepts dsh-app origin only through strict isAppUrl check', () => {

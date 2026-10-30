@@ -9,7 +9,12 @@
       "newWorktree": "新建独立工作区分支 (Git Worktree)...",
       "pasteClipboard": "粘贴剪贴板截图/文本至输入框 (Alt+Shift+V)",
       "alwaysOnTop": "窗口始终置顶 (悬浮伴侣模式)",
-      "autoStart": "开机自动启动 (Windows 登录自启)"
+      "autoStart": "开机自动启动 (Windows 登录自启)",
+      "openWorkspace": "打开工作区…",
+      "recentWorkspaces": "最近工作区",
+      "recentEmpty": "（暂无最近工作区）",
+      "recentCurrent": "（当前）",
+      "removeRecent": "从最近列表移除当前工作区"
     },
     "engine": {
       "title": "引擎与更新 (Engine & Updates)",
@@ -29,7 +34,12 @@
       "registerContextMenu": "添加 Windows 文件夹右键快捷启动",
       "unregisterContextMenu": "移除 Windows 文件夹右键快捷项",
       "openDataDir": "打开 DSH 数据与插件目录",
-      "openDevTools": "打开开发者调试工具 (DevTools)"
+      "openDevTools": "打开开发者调试工具 (DevTools)",
+      "openCrashReports": "打开崩溃报告目录",
+      "installCli": "安装 / 修复 dsh 命令行",
+      "removeCli": "移除 dsh 命令行",
+      "openKeybindings": "打开快捷键配置",
+      "reloadKeybindings": "重新加载快捷键"
     }
   },
   "tray": {
@@ -137,6 +147,39 @@
       "syncPresets": "正在同步出厂预置插件（{count} 项）...",
       "downloadShell": "正在下载客户端外壳更新 ({percent}%)...",
       "launchInstaller": "正在启动安装程序..."
+    },
+    "backgroundClose": {
+      "title": "隐藏到系统托盘",
+      "message": "关闭窗口后应用会继续在系统托盘运行",
+      "detail": "正在运行的任务不会中断。可通过托盘图标或 Alt+Space 重新打开窗口。",
+      "confirm": "隐藏窗口"
+    },
+    "quitConfirm": {
+      "title": "退出 DeepSeek Harness",
+      "message": "确定要退出吗？",
+      "detail": "后端正在运行（{context}）。正在进行的对话、任务与定时提醒会被中断。",
+      "quit": "退出"
+    },
+    "cliInstall": {
+      "title": "dsh 命令行",
+      "success": "已安装 dsh 命令行到 {path}",
+      "failure": "安装失败：{reason}",
+      "detail": "新开一个终端后即可运行 dsh --version。现有终端需要重新打开才能读取新的 PATH。"
+    },
+    "cliRemove": {
+      "title": "移除 dsh 命令行",
+      "success": "已移除 dsh 命令行并清理用户 PATH 条目。",
+      "failure": "移除失败：{reason}"
+    },
+    "keybindings": {
+      "title": "快捷键配置",
+      "reloaded": "已重新加载快捷键，当前呼出快捷键：{shortcut}",
+      "invalid": "快捷键配置无效，已回退到默认值。",
+      "unavailable": "（注册失败，可能被其他程序占用）"
+    },
+    "workspace": {
+      "title": "打开工作区",
+      "openFailed": "打开工作区失败：{message}"
     }
   },
   "notify": {

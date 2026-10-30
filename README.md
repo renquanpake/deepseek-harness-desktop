@@ -17,12 +17,12 @@
 
 ### 方式二：本地一键生成 Windows 安装包
 1. 在项目根目录双击 **`一键打包及安装.bat`**。
-  2. 脚本全自动配置国内全链路镜像并在 `dist/` 目录下生成 `DeepSeek Harness Setup 0.2.1.exe` 安装包。
+  2. 脚本全自动配置国内全链路镜像并在 `dist/` 目录下生成 `DeepSeek Harness Setup 0.3.0.exe` 安装包。
 3. 双击生成的 `.exe` 即可像普通 Windows 软件一样安装使用。
 
 ### 方式三：GitHub Actions 云端全自动打包
 * 本项目已配置自动化 CI/CD 流程（`.github/workflows/build.yml`）。
-* 代码推送到 GitHub 仓库并打上版本标签（如 `v0.2.1`）后，GitHub Actions 将自动完成云端构建并发布正式的 Release 安装包及 SHA-256 校验清单。
+* 代码推送到 GitHub 仓库并打上版本标签（如 `v0.3.0`）后，GitHub Actions 将自动完成云端构建并发布正式的 Release 安装包及 SHA-256 校验清单。
 
 ---
 
@@ -34,10 +34,12 @@
   * **告别多余双侧栏**：剔除冗余外层 `<webview>` 与假侧边轨，完整呈现 DSH 原生全屏界面；启动阶段由轻量原生 `splash.html` 过渡，零白屏闪烁。
   * **Windows 原生集成**：支持 Windows 11 暗黑极简顶栏融合（`titleBarStyle: 'hidden'`）、全局呼出快捷键（`Alt+Space`）、桌面端托盘驻留与文件夹右键快捷启动。
 * **🩺 自动故障排查与环境自愈引擎 (`lib/self-repair.js`)**：
-  * **8 秒超时守护**：启动阶段若因环境阻塞超过 8 秒未就绪，自动触发无感检修与自愈重连。
+  * **8 秒检修入口 + 15 秒看门狗**：启动页在 8 秒后显示「环境自动体检」入口供手动触发；热更内核由 15 秒启动看门狗校验，未就绪且窗口连续加载失败时熔断并回退到出厂内核。
   * **强退残留死锁自愈**：基于 PID 存活探活，毫秒级清理 `.lock` 进程死锁。
   * **解封熔断标记**：自动扫描并清除 `.broken-marker.json` 异常阻断。
   * **原生菜单一键体检**：在应用顶部菜单「引擎与更新」→「🩺 环境自动体检与自愈」中可随时一键体检并生成诊断报告。
+  * **dsh 命令行一键注册**：在「Windows 系统集成」中安装或移除 `dsh` 命令，只改写当前用户 PATH 中对应的那一条。
+  * **工作区快速切换**：「工作台」菜单支持打开目录与最近工作区列表，最多保留 12 个，切换后自动重启后端。
 * **🧩 出厂官方增强插件深度合并 (`lib/preset-hydrator.js`)**：
   * 预置并自动激活 `dsh-codex-ui`（工作台增强）、`dshmarket`（插件市场）、`dsh-better-sidebar`、`dsh-pathlink`、`dsh-paste-input`、`dsh-checkpoint-rewind` 等全套体验。
 * **⚡ 国内双轨秒级热更 (`lib/updater.js`)**：
@@ -54,6 +56,8 @@
 | `Alt + Shift + V` | 将剪贴板中的最新截图或文本直接灌入输入框 |
 | `F12` | 打开开发者调试工具 (DevTools) |
 
+呼出快捷键与 DevTools 快捷键可在用户数据目录的 `keybindings.json` 中修改，改完后从「Windows 系统集成」→「重新加载快捷键」生效。
+
 ---
 
 ## 🛠️ 命令行开发与测试
@@ -68,9 +72,18 @@ npm run runtime:prepare
 # 3. 启动开发模式
 npm start
 
-# 4. 执行全量测试（包含 69 项全量自愈、Token 捕获与 IPC 鉴权测试）
+# 4. 静态检查与全量测试（覆盖自愈、Token 捕获、IPC 鉴权与打包清单校验）
+npm run lint
 npm test
 
-# 5. 打包生成 Windows 安装包
+# 4.1 带覆盖率门禁的测试（行 75% / 分支 70% / 函数 62%）
+npm run test:coverage
+
+# 5. 执行 Electron 端到端测试（需要图形环境，无桌面时用 xvfb-run）
+npm run test:e2e
+
+# 6. 打包生成 Windows 安装包
 npm run dist
 ```
+
+端到端测试通过 `DSH_E2E=1` 与 `DSH_E2E_BACKEND_URL` 指向本地夹具服务，只接受 `127.0.0.1`/`localhost` 的 HTTP 地址，用于验证窗口启动、preload 桥接、CSP 注入与外链拦截；CI 在 `ubuntu-latest` 上以 `xvfb-run` 执行。

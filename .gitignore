@@ -32,3 +32,10 @@ npm-debug.log*
 # OS files
 Thumbs.db
 .DS_Store
+
+# Local reference checkout (official harness, not part of this project)
+dsh-official/
+
+# Update manifest signing keys (never commit the private key)
+update-signing-key.pem
+*.private.pem

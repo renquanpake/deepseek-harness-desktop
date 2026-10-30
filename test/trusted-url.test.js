@@ -98,3 +98,16 @@ test('isTrustedSender: allows dsh-app://app origin and rejects spoofed variants'
     false
   );
 });
+
+const { isFileInsideRoot } = require('../lib/trusted-url');
+
+test('isFileInsideRoot only accepts files below the app root', () => {
+  const root = path.resolve('/app');
+  assert.strictEqual(isFileInsideRoot('file:///app/splash.html', root), true);
+  assert.strictEqual(isFileInsideRoot('file:///app/nested/page.html', root), true);
+  assert.strictEqual(isFileInsideRoot('file:///etc/passwd', root), false);
+  assert.strictEqual(isFileInsideRoot('file:///app/../secret.txt', root), false);
+  assert.strictEqual(isFileInsideRoot('file://app/splash.html', root), false);
+  assert.strictEqual(isFileInsideRoot('https://example.com/x', root), false);
+  assert.strictEqual(isFileInsideRoot('file:///app/splash.html', ''), false);
+});

@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const {
+  resolveInstallerFileName,
   semverCompare,
   isNewer,
   decideUpdatePlan,
@@ -89,6 +90,21 @@ test('buildProxyedUrls: empty proxy list returns original only', () => {
   assert.deepStrictEqual(out, ['https://example.com/x']);
 });
 
+test('buildProxyedUrls: jsdelivr proxy rewrites raw.githubusercontent urls', () => {
+  const out = buildProxyedUrls('https://raw.githubusercontent.com/o/r/main/latest.yml', [
+    'https://fastly.jsdelivr.net/'
+  ]);
+  assert.deepStrictEqual(out, [
+    'https://raw.githubusercontent.com/o/r/main/latest.yml',
+    'https://fastly.jsdelivr.net/gh/o/r@main/latest.yml'
+  ]);
+});
+
+test('buildProxyedUrls: drops proxies that cannot handle non-github hosts', () => {
+  const out = buildProxyedUrls('https://example.com/x', ['https://ghfast.top/']);
+  assert.deepStrictEqual(out, ['https://example.com/x']);
+});
+
 test('pickInstallerUrl: prefers non-portable .exe', () => {
   const assets = [
     { name: 'app-portable-1.0.0.exe', browser_download_url: 'https://x/portable.exe' },
@@ -141,4 +157,20 @@ test('verifyInstallerIntegrity: validates matching hash and deletes tampered fil
   assert.strictEqual(fs.existsSync(filePath), false, 'Tampered installer must be unlinked immediately');
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('resolveInstallerFileName accepts sane exe names and rejects others', () => {
+  assert.strictEqual(
+    resolveInstallerFileName('https://github.com/o/r/releases/download/v1.0.0/DeepSeek%20Harness%20Setup%201.0.0.exe'),
+    'DeepSeek Harness Setup 1.0.0.exe'
+  );
+  assert.strictEqual(resolveInstallerFileName('https://x/setup.exe?token=1'), 'setup.exe');
+  assert.strictEqual(resolveInstallerFileName('https://x/setup.msi'), null);
+  assert.strictEqual(resolveInstallerFileName('https://x/run.bat'), null);
+  assert.strictEqual(resolveInstallerFileName('https://x/'), 'DeepSeek-Harness-Setup.exe');
+  assert.strictEqual(resolveInstallerFileName('not-a-url'), 'DeepSeek-Harness-Setup.exe');
+  assert.strictEqual(
+    resolveInstallerFileName('https://x/we%22ird%3Cname%3E.exe'),
+    'DeepSeek-Harness-Setup.exe'
+  );
 });

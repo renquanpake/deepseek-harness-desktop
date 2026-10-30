@@ -38,5 +38,7 @@ for (const rel of LEGACY_PATHS) {
       fs.rmSync(fullPath, { recursive: true, force: true });
       console.log(`[clean-legacy] Removed obsolete path: ${rel}`);
     }
-  } catch {}
+  } catch {
+    /* 尽力而为：失败不阻断主流程 */
+  }
 }

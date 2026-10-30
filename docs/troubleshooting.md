@@ -1,6 +1,6 @@
 # 故障排查
 
-本文适用于 `DeepSeek Harness` 0.2.1 桌面外壳。命令以 Windows 默认安装为例；便携模式请把 `%USERPROFILE%\.dsh` 替换为 `<程序目录>\portable-data\.dsh`。
+本文适用于 `DeepSeek Harness` 0.3.0 桌面外壳。命令以 Windows 默认安装为例；便携模式请把 `%USERPROFILE%\.dsh` 替换为 `<程序目录>\portable-data\.dsh`。
 
 菜单栏默认自动隐藏，按 `Alt` 可显示。应用内菜单名为「引擎与更新」；部分历史弹窗文案仍写作「引擎与救援」，指向同一个菜单。
 
@@ -335,11 +335,13 @@ wsl.exe -- bash -lc "curl -I http://127.0.0.1:3080"
 
 ## 7. 日志位置
 
-当前外壳没有把主进程日志写入文件，主进程输出只到启动它的终端。打包版从快捷方式启动时没有控制台，这是已知的运维缺口。
+外壳会把关键操作与崩溃写入 Electron 用户数据目录，主进程 stdout/stderr 仍然只到启动它的终端。
 
 | 日志或数据 | 位置 | 查看方式 |
 | --- | --- | --- |
 | 外壳主进程 stdout/stderr | 启动终端 | 源码模式运行 `npm start`，或从 `一键启动.bat` 的窗口查看 |
+| 操作日志 | Electron 用户数据目录下的 `logs\operations.jsonl` | 「Windows 系统集成」→「打开崩溃报告目录」后返回上一级 `logs`，或直接读取文件 |
+| 崩溃报告 | Electron 用户数据目录下的 `crash-reports\crash-<时间戳>-<类型>.json` | 「Windows 系统集成」→「打开崩溃报告目录」，保留最近 20 份 |
 | 渲染进程与 DSH 页面 | DevTools | 「Windows 系统集成」→「打开开发者调试工具」，或按 `F12` |
 | DSH 数据目录 | `%USERPROFILE%\.dsh` | 「Windows 系统集成」→「打开 DSH 数据与插件目录」 |
 | 本地热更新内核 | `%USERPROFILE%\.dsh\local-runtime` | 查看 `node_modules\@deepseek-ai\dsh\package.json` |
@@ -361,8 +363,18 @@ wsl.exe -- bash -lc "curl -I http://127.0.0.1:3080"
 - `[reg-menu]`：右键菜单注册。
 - `[ipc]`：IPC 来源校验拒绝。
 - `[tray]`：托盘创建与菜单异常。
+- `[crash]`：崩溃报告写入位置，例如 `uncaught-exception`、`unhandled-rejection`、`renderer-gone`。
+- `[operation-log]`：操作日志写入失败。
 
 需要提交问题时，优先提供从终端启动的完整输出，并注明外壳版本、DSH 内核版本、引擎模式和当前端口。
+
+## 7.1 CSP 违规排查
+
+- 默认 `DSH_BACKEND_CSP=report`：后端主文档会收到 `Content-Security-Policy-Report-Only`，违规只记录不拦截。
+- 记录写入 `logs\operations.jsonl`，`type` 为 `csp-violation`，相同内容 10 秒内只记一次。
+- 临时强制：设置 `DSH_BACKEND_CSP=enforce` 后重启应用，浏览器会按严格策略拦截；出现白屏就改回 `report` 并提交日志。
+- 完全关闭：`DSH_BACKEND_CSP=off`。
+- 该开关只影响后端 HTTP 主文档；`dsh-app://` 页面始终使用 `lib/app-protocol.js` 的完整策略。
 
 ## 8. 自愈流程
 

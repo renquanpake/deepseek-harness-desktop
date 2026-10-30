@@ -9,7 +9,12 @@
       "newWorktree": "New Isolated Workspace Branch (Git Worktree)...",
       "pasteClipboard": "Paste Clipboard Screenshot/Text into Input (Alt+Shift+V)",
       "alwaysOnTop": "Always on Top (Floating Companion Mode)",
-      "autoStart": "Start on Login (Windows Login)"
+      "autoStart": "Start on Login (Windows Login)",
+      "openWorkspace": "Open workspace…",
+      "recentWorkspaces": "Recent workspaces",
+      "recentEmpty": "(no recent workspaces)",
+      "recentCurrent": "(current)",
+      "removeRecent": "Remove current workspace from recents"
     },
     "engine": {
       "title": "Engine & Updates",
@@ -29,7 +34,12 @@
       "registerContextMenu": "Add Windows Folder Context Menu Shortcut",
       "unregisterContextMenu": "Remove Windows Folder Context Menu Shortcut",
       "openDataDir": "Open DSH Data and Plugin Directory",
-      "openDevTools": "Open Developer Tools (DevTools)"
+      "openDevTools": "Open Developer Tools (DevTools)",
+      "openCrashReports": "Open crash report folder",
+      "installCli": "Install / repair dsh command",
+      "removeCli": "Remove dsh command",
+      "openKeybindings": "Open shortcut configuration",
+      "reloadKeybindings": "Reload shortcuts"
     }
   },
   "tray": {
@@ -137,6 +147,39 @@
       "syncPresets": "Syncing factory preset plugins ({count} items)...",
       "downloadShell": "Downloading shell update ({percent}%)...",
       "launchInstaller": "Launching installer..."
+    },
+    "backgroundClose": {
+      "title": "Hide to system tray",
+      "message": "The app keeps running in the system tray after the window closes",
+      "detail": "Running tasks continue. Reopen the window from the tray icon or with Alt+Space.",
+      "confirm": "Hide window"
+    },
+    "quitConfirm": {
+      "title": "Quit DeepSeek Harness",
+      "message": "Quit the application?",
+      "detail": "The backend is running ({context}). In-progress conversations, tasks and scheduled reminders will be interrupted.",
+      "quit": "Quit"
+    },
+    "cliInstall": {
+      "title": "dsh command line",
+      "success": "Installed the dsh command into {path}",
+      "failure": "Install failed: {reason}",
+      "detail": "Open a new terminal and run dsh --version. Existing terminals must be reopened to pick up the new PATH."
+    },
+    "cliRemove": {
+      "title": "Remove dsh command line",
+      "success": "Removed the dsh command and cleaned up the user PATH entry.",
+      "failure": "Remove failed: {reason}"
+    },
+    "keybindings": {
+      "title": "Shortcut configuration",
+      "reloaded": "Shortcuts reloaded. Current relay shortcut: {shortcut}",
+      "invalid": "The shortcut configuration is invalid; defaults were restored.",
+      "unavailable": "(registration failed, possibly taken by another app)"
+    },
+    "workspace": {
+      "title": "Open workspace",
+      "openFailed": "Failed to open workspace: {message}"
     }
   },
   "notify": {

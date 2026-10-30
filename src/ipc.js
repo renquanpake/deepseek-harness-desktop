@@ -1,28 +1,18 @@
 'use strict';
 
-const { assertValid } = require('../lib/ipc-schema');
+const { assertValid, NO_ARG_CHANNELS: SCHEMA_NO_ARG_CHANNELS } = require('../lib/ipc-schema');
 
 const ON_REJECT_LABELS = {
   'dsh:native-notify': 'native-notify',
   'dsh:request-clipboard-paste': 'clipboard-paste'
 };
 
-const NO_ARG_CHANNELS = [
-  'dsh:get-runtime-info',
-  'dsh:get-backend-status',
-  'dsh:get-plugin-inventory',
-  'dsh:rehydrate-plugins',
-  'dsh:create-worktree-dialog',
-  'dsh:restart-safe-mode',
-  'dsh:register-context-menu',
-  'dsh:unregister-context-menu',
-  'dsh:get-auto-start',
-  'dsh:get-workspace-status',
-  'dsh:run-self-repair',
-  'dsh:check-update'
-];
+// 无参通道以 lib/ipc-schema.js 中的校验器为准，这里只排除走 ipcMain.on 的通道
+const NO_ARG_CHANNELS = SCHEMA_NO_ARG_CHANNELS.filter(
+  (channel) => !Object.prototype.hasOwnProperty.call(ON_REJECT_LABELS, channel)
+);
 
-function createIpcGuard({ assertTrustedSender, log = console }) {
+function createIpcGuard({ assertTrustedSender }) {
   function guardPayload(channel, payload) {
     assertValid(channel, payload);
   }
@@ -39,7 +29,7 @@ function createIpcGuard({ assertTrustedSender, log = console }) {
 }
 
 function registerIpcHandlers({ ipcMain, assertTrustedSender, actions, log = console }) {
-  const { guardPayload, wrapInvoke } = createIpcGuard({ assertTrustedSender, log });
+  const { guardPayload, wrapInvoke } = createIpcGuard({ assertTrustedSender });
 
   ipcMain.on('dsh:native-notify', (event, payload) => {
     try {

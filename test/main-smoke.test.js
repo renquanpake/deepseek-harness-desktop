@@ -2,7 +2,6 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const path = require('node:path');
 const Module = require('module');
 const { schemas } = require('../lib/ipc-schema');
 
@@ -13,7 +12,7 @@ function buildFakeElectron(state) {
     getPath: (name) => (name === 'exe' ? '/tmp/dsh-smoke/bin/deepseek-harness.exe' : '/tmp/dsh-smoke/userdata'),
     setPath: noop,
     getAppPath: () => process.cwd(),
-    on: (channel, fn) => {
+    on: (channel, _fn) => {
       state.appEvents.push(channel);
     },
     quit: noop,

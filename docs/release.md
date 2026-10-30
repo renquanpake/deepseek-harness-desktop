@@ -1,6 +1,6 @@
 # 发布与回滚
 
-本文说明 `DeepSeek Harness` 桌面外壳的版本绑定、构建、校验、发布、灰度与回滚流程。当前版本为 `0.2.1`。
+本文说明 `DeepSeek Harness` 桌面外壳的版本绑定、构建、校验、发布、灰度与回滚流程。当前版本为 `0.3.0`。
 
 ## 1. 版本模型
 
@@ -15,8 +15,8 @@
 
 ### 外壳版本
 
-- 当前为 `0.2.1`，定义在 `package.json`。
-- Git tag 使用 `v` 前缀，例如 `v0.2.1`。
+- 当前为 `0.3.0`，定义在 `package.json`。
+- Git tag 使用 `v` 前缀，例如 `v0.3.0`。
 - `build.yml` 只在 `v*` tag 上创建 GitHub Release。
 - 工作流没有校验 tag 与 `package.json` 版本是否一致，发布前必须人工确认。
 
@@ -60,16 +60,18 @@ node -p "require(process.env.USERPROFILE + '/.dsh/local-runtime/node_modules/@de
 - Node.js 22。
 - npm 10 或兼容版本。
 - 可访问 npm 源与 GitHub；国内构建可使用 npmmirror 镜像。
-- 打包目标为 NSIS x64 安装包，产物输出到 `dist/`。
+- 打包目标：Windows NSIS x64，产物输出到 `dist/`。
 
-CI 门禁运行在 `ubuntu-latest`，只做语法检查和单元测试；正式安装包由 `build.yml` 在 Windows 上构建。
+两段式 CI：`ci.yml` 在每次 push / PR 上依次执行 `npm ci`、语法检查、ESLint、带覆盖率门禁的单元测试与 Electron e2e；`build.yml` 复用同一套检查，打 `v*` tag 时先校验 tag 与 `package.json` 版本一致，再打包 Windows 安装包、校验 `app.asar` 内容并创建 Release。当前安装包为未签名构建。
+
+覆盖率门禁口径：`lib/**`、`src/**` 与 `main.js`，行 75%、分支 70%、函数 62%；本地用 `npm run test:coverage` 复现。
 
 ## 3. 构建命令
 
-当前 `package-lock.json` 与 `package.json` 不同步，直接执行 `npm ci` 会报 `Missing: ... from lock file`。在锁文件修复前使用 `npm install`；修复后应改用 `npm ci` 以获得可复现安装。
+锁文件已与 `package.json` 同步，统一使用 `npm ci` 获得可复现安装。
 
 ```powershell
-npm install --no-audit --no-fund
+npm ci --no-audit --no-fund
 ```
 
 固定内置内核版本后再准备运行时：
@@ -113,13 +115,13 @@ npx electron-builder --win --publish never
 
 ### 产物
 
-`electron-builder` 默认生成：
+`electron-builder` 生成：
 
 ```text
-dist\DeepSeek Harness Setup 0.2.1.exe
+dist\DeepSeek Harness Setup 0.3.0.exe        # Windows NSIS x64
 ```
 
-同时可能生成 `.blockmap` 和 `latest.yml` 等辅助文件。当前 `package.json` 只配置了 NSIS 目标，没有配置 Portable 目标。
+同时可能生成 `.blockmap` 与 `latest.yml` 等辅助文件。当前 `package.json` 没有配置 Portable 目标。
 
 `build.yml` 会额外生成：
 
@@ -129,14 +131,14 @@ dist\SHA256SUMS.txt
 
 ### 生成校验和
 
-`SHA256SUMS.txt` 由 `build.yml` 的 PowerShell 步骤生成，覆盖 `dist` 下的 `*.exe` 与 `*.zip`，排除 `*.blockmap`。Release 正文会内嵌同一份校验和。
+`SHA256SUMS.txt` 由 `build.yml` 的 `release` 作业在汇总构建产物后生成，覆盖 `dist` 下的 `*.exe`，排除 `*.blockmap`。Release 正文会内嵌同一份校验和。
 
 本地构建不会自动生成该文件；需要时按相同规则手工生成，或使用工作流产物。
 
 ### 校验安装包
 
 ```powershell
-Get-FileHash ".\dist\DeepSeek Harness Setup 0.2.1.exe" -Algorithm SHA256
+Get-FileHash ".\dist\DeepSeek Harness Setup 0.3.0.exe" -Algorithm SHA256
 ```
 
 ```powershell
@@ -144,15 +146,47 @@ Get-Content ".\dist\SHA256SUMS.txt"
 ```
 
 ```powershell
-certutil -hashfile ".\dist\DeepSeek Harness Setup 0.2.1.exe" SHA256
+certutil -hashfile ".\dist\DeepSeek Harness Setup 0.3.0.exe" SHA256
 ```
 
 三处结果应一致。`.blockmap` 与 `latest.yml` 不在 `SHA256SUMS.txt` 覆盖范围内，需要单独记录或校验。
 
+### 校验安装包内容清单
+
+`scripts/verify-packaging.js` 会扫描 `main.js`、`preload.js`、`lib/`、`src/` 的运行时 `require` 与启动页、语言包、托盘图标等静态资源，逐项比对 `package.json` 的 `build.files` 白名单。`build.yml` 在打包后自动执行该检查，产物缺文件时构建直接失败。
+
+本地只检查白名单：
+
+```powershell
+node scripts/verify-packaging.js
+```
+
+检查已生成的 `app.asar` 实际内容（需要已安装 `@electron/asar`）：
+
+```powershell
+node scripts/verify-packaging.js --asar ".\dist\win-unpacked\resources\app.asar"
+```
+
+新增主进程模块或资源目录时，必须同时在 `build.files` 中登记，否则 `npm test` 中的打包清单用例会失败。
+
+### 更新清单签名
+
+安装包之外还会发布一个签名清单 `latest.json`，客户端用它校验下载的安装包是否来自本仓库发布流程：
+
+1. 维护者本地生成密钥对（私钥不入库）：
+   ```powershell
+   node scripts/generate-update-keypair.js --private .\update-signing-key.pem --public .\build\update-public-key.pem
+   ```
+2. 私钥内容写入仓库 Secret `UPDATE_MANIFEST_KEY`，公钥随安装包发布（`build/update-public-key.pem`，已包含在 `build.files`）。
+3. 打 `v*` tag 后，`build.yml` 会调用 `scripts/sign-update-manifest.js` 生成 `latest.json`，内容为 `{ manifest: { version, tag, installerUrl, sha256, createdAt }, signature }`。
+4. 客户端检测到随包公钥时，必须找到签名有效的 `latest.json` 才接受该 Release；签名缺失或无效会跳过该来源。未随包公钥时沿用原来的 SHA-256 校验并继续工作。
+
+私钥泄露后旧的清单会失效，需要重新生成密钥对、替换公钥并重新发布版本。
+
 ### 校验签名状态
 
 ```powershell
-Get-AuthenticodeSignature ".\dist\DeepSeek Harness Setup 0.2.1.exe"
+Get-AuthenticodeSignature ".\dist\DeepSeek Harness Setup 0.3.0.exe"
 ```
 
 当前预期状态为 `NotSigned`。这不是校验失败，而是本期没有代码签名证书。
@@ -183,14 +217,14 @@ node -p "require('./resources/app.asar.unpacked/dsh-runtime/node_modules/@deepse
 
 ## 6. 发布流程
 
-1. 确认 `package.json` 版本号，例如 `0.2.1`。
+1. 确认 `package.json` 版本号，例如 `0.3.0`。
 2. 固定 `DSH_VERSION`，记录实际内置内核版本。
-3. 在 Windows 构建机执行依赖安装、`runtime:prepare`、`npm test`、`npm run dist`。
+3. 在 Windows 构建机执行依赖安装、`npm run lint`、`npm test`、`runtime:prepare`、`npm run dist`。
 4. 校验安装包 SHA-256、签名状态和内置内核版本。
 5. 在干净的 Windows 虚拟机或测试机安装并启动，确认后端就绪、插件加载、快捷键和托盘正常。
-6. 提交代码并创建与外壳版本一致的 tag，例如 `v0.2.1`。
+6. 提交代码并创建与外壳版本一致的 tag，例如 `v0.3.0`。
 7. 推送 tag，触发 `build.yml`。
-8. 等待 `build.yml` 完成测试、打包、生成 `SHA256SUMS.txt` 和创建 Release。
+8. 等待 `build.yml` 完成测试、Windows 打包、`app.asar` 内容校验、生成 `SHA256SUMS.txt` 和创建 Release。
 9. 下载 Release 资产，复核校验和后再对外发布。
 
 `build.yml` 还会在推送到 `main` 或 `master`、向 `main` 提交 Pull Request，以及手动触发时构建，但只有 `v*` tag 会创建 Release。
@@ -266,6 +300,6 @@ node -p "require('./resources/app.asar.unpacked/dsh-runtime/node_modules/@deepse
 - 账号体系、登录、授权与用户级发布控制。
 - 服务端灰度、分批放量和渠道切换。
 - 自动降级。
-- Portable 构建目标与 macOS、Linux 安装包。
+- Portable 构建目标。
 
 当前发布物的完整性依赖 SHA-256 清单，来源可信度依赖 GitHub Release 与 HTTPS。安装时可能出现 SmartScreen 未知发布者提示。

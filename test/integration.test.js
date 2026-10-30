@@ -5,22 +5,18 @@
  * 测试实际的 HTTP 请求、重定向跟随、下载失败回退、版本比较等
  */
 
-const { test, before, after } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert');
 const http = require('http');
-const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const {
-  semverCompare,
   isNewer,
   decideUpdatePlan,
   buildProxyedUrls,
-  pickInstallerUrl,
   downloadFromUrl,
   downloadWithProxies,
-  httpGetJson,
   checkRemoteCoreVersion: checkCoreFromUrls,
   checkRemoteShellVersion: checkShellFromUrls,
   checkRemoteReleaseAssets: checkReleaseFromUrls
@@ -343,7 +339,7 @@ test('11. 小型文件真实下载测试', async () => {
     let progressCalls = 0;
     for (let i = 0; i < urls.length; i++) {
       try {
-        await downloadFromUrl(urls[i], destPath, (pct) => {
+        await downloadFromUrl(urls[i], destPath, (_pct) => {
           progressCalls++;
         });
         success = true;

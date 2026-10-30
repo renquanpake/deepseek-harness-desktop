@@ -29,15 +29,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: |
-          # package-lock.json 与 package.json 同步时使用 npm ci；
-          # 当前锁文件缺少依赖记录，npm ci 会直接失败，回退到 npm install。
-          if npm ci --dry-run --ignore-scripts --no-audit --no-fund > /dev/null 2>&1; then
-            npm ci --no-audit --no-fund
-          else
-            echo "::warning::package-lock.json is out of sync with package.json; falling back to npm install"
-            npm install --no-audit --no-fund
-          fi
+        run: npm ci --no-audit --no-fund
 
       - name: Syntax check main.js
         run: node --check main.js
@@ -45,5 +37,36 @@ jobs:
       - name: Syntax check preload.js
         run: node --check preload.js
 
-      - name: Run tests
-        run: npm test
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run tests with coverage gate
+        run: npm run test:coverage
+
+  e2e:
+    name: Electron end-to-end
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 30
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 0
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Electron runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2
+
+      - name: Run Electron e2e suite
+        run: xvfb-run --auto-servernum npm run test:e2e

@@ -64,7 +64,9 @@ function createBackend(deps) {
       } else {
         process.kill(-pid, 'SIGKILL');
       }
-    } catch {}
+    } catch {
+    /* 尽力而为：失败不阻断主流程 */
+  }
   }
 
   function clearLocalRuntimeWatchdog() {

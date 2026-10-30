@@ -11,6 +11,7 @@ const {
   SCHEME_PRIVILEGES,
   mimeFor,
   buildCsp,
+  buildBackendCsp,
   isAppUrl,
   resolveAppRequest,
   registerAppSchemePrivileges,
@@ -171,6 +172,22 @@ test('buildCsp: omits backend origin when unset and relaxes eval only in dev', (
 
   assert.throws(() => buildCsp({ backendOrigin: 'file:///etc/passwd' }), TypeError);
   assert.throws(() => buildCsp({ backendOrigin: 'not-a-url' }), TypeError);
+});
+
+test('buildBackendCsp: hardens object, base and framing without touching script or style sources', () => {
+  const csp = buildBackendCsp();
+  assert.match(csp, /object-src 'none'/);
+  assert.match(csp, /base-uri 'self'/);
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.doesNotMatch(csp, /script-src/);
+  assert.doesNotMatch(csp, /style-src/);
+  assert.doesNotMatch(csp, /connect-src/);
+});
+
+test('buildBackendCsp: preserves backend-sent directives without duplicating them', () => {
+  const csp = buildBackendCsp("default-src 'self'; object-src 'none'");
+  assert.match(csp, /default-src 'self'/);
+  assert.strictEqual((csp.match(/object-src/g) || []).length, 1);
 });
 
 test('isAppUrl: accepts only dsh-app://app origins', () => {
