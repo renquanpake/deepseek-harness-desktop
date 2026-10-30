@@ -6,7 +6,9 @@ const {
   resolveDshEntry,
   resolveDshCommand,
   buildLaunchArgs,
-  parseAuthenticatedUrl
+  parseAuthenticatedUrl,
+  probeWebCapabilities,
+  adoptCapturedPort
 } = require('../lib/dsh-adapter');
 const { runTaskkill } = require('../lib/secure-exec');
 
@@ -25,6 +27,7 @@ function createBackend(deps) {
     getDshHome,
     getLocalRuntimeDir,
     getPort,
+    setPort,
     getEngine,
     isSafeMode,
     isQuitting,
@@ -197,6 +200,23 @@ function createBackend(deps) {
     }
   }
 
+  const capabilityCache = new Map();
+
+  function probeCapabilities(entry) {
+    if (capabilityCache.has(entry)) return capabilityCache.get(entry);
+    const capabilities = probeWebCapabilities({ entry });
+    capabilityCache.set(entry, capabilities);
+    return capabilities;
+  }
+
+  function adoptPort(capturedUrl) {
+    const port = adoptCapturedPort(capturedUrl, getPort());
+    if (port && typeof setPort === 'function') {
+      setPort(port);
+      console.log(`[dsh-auth] 已跟随上游端口切换到 ${port}`);
+    }
+  }
+
   function startDshBackend(resetCrash = true) {
     killProcessTree();
     cleanStaleLocks(getDshHome());
@@ -207,7 +227,6 @@ function createBackend(deps) {
     const runtimeDir = getRuntimeDir();
     const port = getPort();
     const workspaceDir = getWorkspaceDir();
-    const args = buildLaunchArgs({ port, safeMode: isSafeMode() });
     const env = buildBackendEnv();
     const isWindows = process.platform === 'win32';
     watchedRuntimeExitCode = null;
@@ -232,6 +251,8 @@ function createBackend(deps) {
     } else {
       const dshCliJs = resolveDshEntry(runtimeDir, fs);
       const dshCmd = resolveDshCommand(runtimeDir, process.platform, fs);
+      const capabilities = dshCliJs ? probeCapabilities(dshCliJs) : null;
+      const args = buildLaunchArgs({ port, safeMode: isSafeMode(), capabilities });
       const bundledNode = getBundledNodeExe();
       const commonSpawnOpts = {
         cwd: workspaceDir,
@@ -282,6 +303,7 @@ function createBackend(deps) {
           const captured = parseAuthenticatedUrl(complete, { port });
           if (captured) {
             authenticatedBackendUrl = captured;
+            adoptPort(captured);
             console.log(`[dsh-auth] 成功捕获启动认证 URL: ${describeBackendUrl(authenticatedBackendUrl)}`);
           }
         }
@@ -300,6 +322,7 @@ function createBackend(deps) {
           const captured = parseAuthenticatedUrl(line, { port });
           if (captured) {
             authenticatedBackendUrl = captured;
+            adoptPort(captured);
             console.log(`[dsh-auth] 从 stderr 捕获启动认证 URL: ${describeBackendUrl(authenticatedBackendUrl)}`);
           }
         }

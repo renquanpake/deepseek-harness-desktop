@@ -409,6 +409,9 @@ const backend = createBackend({
   getDshHome: () => DSH_HOME,
   getLocalRuntimeDir: () => LOCAL_RUNTIME_DIR,
   getPort: () => currentPort,
+  setPort: (port) => {
+    currentPort = port;
+  },
   getEngine: () => currentEngine,
   isSafeMode: () => isSafeMode,
   isQuitting: () => isQuitting,
@@ -796,6 +799,9 @@ const ipcActions = createIpcActions({
   worktreeManager,
   getMainWindow: () => mainWindow,
   getPort: () => currentPort,
+  setPort: (port) => {
+    currentPort = port;
+  },
   getEngine: () => currentEngine,
   setEngine: (value) => {
     currentEngine = value;

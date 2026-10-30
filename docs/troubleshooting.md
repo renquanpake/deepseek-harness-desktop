@@ -1,6 +1,6 @@
 # 故障排查
 
-本文适用于 `DeepSeek Harness` 0.3.5 桌面外壳。命令以 Windows 默认安装为例；便携模式请把 `%USERPROFILE%\.dsh` 替换为 `<程序目录>\portable-data\.dsh`。
+本文适用于 `DeepSeek Harness` 0.3.6 桌面外壳。命令以 Windows 默认安装为例；便携模式请把 `%USERPROFILE%\.dsh` 替换为 `<程序目录>\portable-data\.dsh`。
 
 菜单栏默认自动隐藏，按 `Alt` 可显示。应用内菜单名为「引擎与更新」；部分历史弹窗文案仍写作「引擎与救援」，指向同一个菜单。
 
@@ -399,7 +399,7 @@ wsl.exe -- bash -lc "curl -I http://127.0.0.1:3080"
 4. 还不行就固定内核：`set DSH_VERSION=<已知可用版本>` 后 `npm run runtime:prepare`，先用旧内核恢复工作。
 5. 应用已经起不来时，直接重新运行 `一键部署.bat`，或在部署目录执行 `git pull` 与 `npm ci`。
 
-自动化的边界：外壳能自己拉取修复代码，但不能凭空生成适配逻辑。上游变更需要维护者先更新 `lib/dsh-adapter.js` 并推送，用户侧再通过上面的步骤拿到。
+自动化的边界：外壳能自己拉取修复代码，也能在启动时探测 `dsh web --help` 自动切换启动参数、跟随上游打印的端口，但不能凭空生成适配逻辑。上游语义级变更需要维护者更新 `lib/dsh-adapter.js` 并推送，用户侧再通过上面的步骤拿到；仓库侧有每日 `upstream-contract` 工作流负责提前发现。
 
 ## 8. 自愈流程
 

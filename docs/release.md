@@ -1,6 +1,6 @@
 # 发布与更新
 
-本文说明 `DeepSeek Harness` 桌面外壳的版本模型、部署方式与更新流程。当前版本为 `0.3.5`。
+本文说明 `DeepSeek Harness` 桌面外壳的版本模型、部署方式与更新流程。当前版本为 `0.3.6`。
 
 ## 1. 版本模型
 
@@ -13,8 +13,8 @@
 
 ### 外壳版本
 
-- 当前为 `0.3.5`，定义在 `package.json`。
-- Git tag 使用 `v` 前缀，例如 `v0.3.5`。
+- 当前为 `0.3.6`，定义在 `package.json`。
+- Git tag 使用 `v` 前缀，例如 `v0.3.6`。
 - 仓库不再构建安装包，外壳更新以重新部署为准。
 
 ### 内置内核版本
@@ -108,7 +108,9 @@ npm run check:upstream -- --runtime-dir .\dsh-runtime
 3. 带 token 的 URL 返回 3xx 并下发认证 Cookie
 4. 携带 Cookie 访问 `/` 返回 200 且内容是 Web 外壳
 
-任一步失败即以非零码退出。建议在抬高 `SUPPORTED_DSH_RANGE` 前，先对目标版本跑一次该检查；CI 可配置成夜间任务，安装 `@deepseek-ai/dsh@latest` 后执行。
+任一步失败即以非零码退出。`upstream-contract.yml` 每天 03:00 自动安装 `@deepseek-ai/dsh@latest` 并执行该检查，失败会自动创建或追加一个 GitHub Issue，附上运行记录和处理步骤。
+
+外壳在启动时还会探测 `dsh web --help`：如果新版本移除了 `--no-open` 或 `--port`，会按实际支持的参数组装命令；端口不匹配时自动采用上游打印的端口，而不是加载失败。
 
 认证 URL 由上游在插件加载完成后才打印，外壳启动时最多等待 10 秒；超时会加载裸地址并输出警告，出现 401 时应优先运行上面的契约检查。
 

@@ -116,3 +116,74 @@ test('isVersionSupported guards the tested range', () => {
   assert.strictEqual(isVersionSupported(null), false);
   assert.strictEqual(describeSupportRange(), '>=0.1.0-0 <0.3.0');
 });
+
+const {
+  parseWebHelp,
+  probeWebCapabilities,
+  portFromUrl
+} = require('../lib/dsh-adapter');
+
+test('parseWebHelp detects supported flags and rejects unrelated help', () => {
+  const full = parseWebHelp('Usage: dsh --profile web [options]\n  --no-open\n  --port <port>\n  --host <host>');
+  assert.deepStrictEqual(full, { supportsNoOpen: true, supportsPort: true });
+
+  const deprecated = parseWebHelp('Serve the DeepSeek Harness UI\n  --listen <port>');
+  assert.deepStrictEqual(deprecated, { supportsNoOpen: false, supportsPort: false });
+
+  assert.strictEqual(parseWebHelp('Usage: dsh plugin [options]'), null);
+  assert.strictEqual(parseWebHelp(''), null);
+  assert.strictEqual(parseWebHelp(null), null);
+});
+
+test('buildLaunchArgs honours probed capabilities', () => {
+  assert.deepStrictEqual(
+    buildLaunchArgs({ port: 3080, capabilities: { supportsNoOpen: true, supportsPort: true } }),
+    ['web', '--no-open', '--port', '3080']
+  );
+  assert.deepStrictEqual(
+    buildLaunchArgs({ port: 3080, capabilities: { supportsNoOpen: false, supportsPort: true } }),
+    ['web', '--port', '3080']
+  );
+  assert.deepStrictEqual(
+    buildLaunchArgs({ port: 3080, capabilities: { supportsNoOpen: true, supportsPort: false } }),
+    ['web', '--no-open']
+  );
+  assert.deepStrictEqual(
+    buildLaunchArgs({ port: 3080, safeMode: true, capabilities: { supportsNoOpen: false, supportsPort: false } }),
+    ['web', '--safe-mode']
+  );
+});
+
+test('probeWebCapabilities parses help output and tolerates failures', () => {
+  const help = 'Usage: dsh --profile web [options]\n  --no-open\n  --port <port>';
+  const probed = probeWebCapabilities({
+    entry: '/app/lib/bin.js',
+    spawnSyncFn: () => ({ status: 0, stdout: help, stderr: '' })
+  });
+  assert.deepStrictEqual(probed, { supportsNoOpen: true, supportsPort: true });
+
+  const broken = probeWebCapabilities({
+    entry: '/app/lib/bin.js',
+    spawnSyncFn: () => {
+      throw new Error('spawn failed');
+    }
+  });
+  assert.strictEqual(broken, null);
+
+  assert.strictEqual(probeWebCapabilities({ entry: null }), null);
+});
+
+test('portFromUrl extracts a valid port only', () => {
+  assert.strictEqual(portFromUrl('http://127.0.0.1:43293/?token=x'), 43293);
+  assert.strictEqual(portFromUrl('http://127.0.0.1/?token=x'), null);
+  assert.strictEqual(portFromUrl('not-a-url'), null);
+  assert.strictEqual(portFromUrl(null), null);
+});
+
+const { adoptCapturedPort } = require('../lib/dsh-adapter');
+
+test('adoptCapturedPort only reports a changed port', () => {
+  assert.strictEqual(adoptCapturedPort('http://127.0.0.1:43293/?token=x', 3080), 43293);
+  assert.strictEqual(adoptCapturedPort('http://127.0.0.1:3080/?token=x', 3080), null);
+  assert.strictEqual(adoptCapturedPort('nope', 3080), null);
+});
