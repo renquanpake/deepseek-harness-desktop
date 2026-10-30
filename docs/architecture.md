@@ -187,7 +187,7 @@ sequenceDiagram
 ## 4. 接入 main.js 所需步骤
 
 1. ✅ 在 `app.whenReady` 之前调用 `registerAppSchemePrivileges(protocol)`，确保 `dsh-app` 获得标准、安全、可 fetch、支持 CORS 的协议权限。（已实现：模块加载期顶层调用）
-2. ⏳ 确认构建产物目录并作为 `appRoot`，同时把该目录加入 `package.json` 的打包文件清单；当前 `build.files` 已包含 `main.js`、`preload.js`、`splash.html`、`lib/`、`src/`、`locales/`、`package.json`、`build/`、`dsh-runtime/`。（现以模块目录为 `appRoot`，静态服务能力已可用；`index.html` 待内核前端产物本地化后纳入）
+2. ⏳ 确认前端构建产物目录并作为 `appRoot`；当前以模块目录为 `appRoot`，静态服务能力已可用，`index.html` 待内核前端产物本地化后纳入。
 3. ✅ 在 `app.whenReady` 之后调用 `createAppProtocolHandler({ protocol, net, appRoot, backendOrigin, registerPrivileges: false })`，`backendOrigin` 使用当前后端地址。（已实现：`installAppProtocolHandler`；`DSH_ENABLE_APP_PROTOCOL=true` 时启用）
 4. ✅ 后端地址同步：`setWindowOpenHandler` 维持后端 HTTP 白名单，`will-navigate` 已增加 `isAppUrl` 判定；启动 splash 在开关开启时改用 `dsh-app://app/splash.html`；后端每次就绪后重装 handler 以刷新 `backendOrigin`。渲染主界面 `loadURL('dsh-app://app/')` 切换待步骤 2 完成。
 5. ✅ CSP：`dsh-app` 响应经封装 handler 注入 `buildCsp({ backendOrigin, dev })` 头（等价于 `onHeadersReceived`，实现更贴近协议层）。

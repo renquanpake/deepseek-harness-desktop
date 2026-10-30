@@ -1,20 +1,11 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
 const UPDATE_CHECK = require('../lib/update-check');
-const {
-  isNewer,
-  decideUpdatePlan,
-  downloadWithProxies,
-  verifyInstallerIntegrity,
-  resolveInstallerFileName
-} = require('../lib/updater');
+const { isNewer, decideUpdatePlan } = require('../lib/updater');
 
 function createUpdateFlow({
-  app,
   dialog,
   shell,
   getMainWindow,
@@ -22,8 +13,6 @@ function createUpdateFlow({
   getCurrentDshVersion,
   getShellVersion,
   localRuntimeDir,
-  portableMarkerDir,
-  getPortableDataRoot,
   getBundledNodeExe,
   getBundledPnpmCjs,
   preset,
@@ -105,12 +94,6 @@ function createUpdateFlow({
     } catch (err) {
       console.warn(`[dsh-watchdog] 扫描隔离内核失败: ${err.message}`);
     }
-  }
-
-  function isPortable() {
-    if (getPortableDataRoot()) return true;
-    const exeDir = path.dirname(app.getPath('exe'));
-    return fs.existsSync(path.join(exeDir, portableMarkerDir));
   }
 
   async function revertToFactoryRuntime() {
@@ -201,97 +184,20 @@ function createUpdateFlow({
       }
 
       if (shellInfo.needsUpdate && options.updateShell) {
-        const release = await UPDATE_CHECK.checkReleaseAssets();
-        if (!release) {
-          dialog.showMessageBox(mainWindow, {
-            type: 'warning',
-            title: t('dialog.shellUpdate.unavailableTitle'),
-            message: t('dialog.shellUpdate.unavailableMessage')
-          });
-          hooks.clearWindowProgress();
-        } else {
-          const installerName = resolveInstallerFileName(release.installerUrl);
-          if (!installerName) {
-            hooks.clearWindowProgress();
-            dialog.showErrorBox(
-              t('error.integrityCheckFailed'),
-              t('error.integrityCheckFailedMessage', { reason: 'installer-name-rejected' })
-            );
-            return;
-          }
-          const installerDir = path.join(os.tmpdir(), 'dsh-shell-update');
-          fs.mkdirSync(installerDir, { recursive: true });
-          const installerPath = path.join(installerDir, installerName);
-          hooks.setWindowProgress(t('dialog.progress.downloadShell', { percent: 0 }));
-          await downloadWithProxies(release.installerUrl, installerPath, (percent) => {
-            hooks.setWindowProgress(t('dialog.progress.downloadShell', { percent }));
-          }, { proxies: UPDATE_CHECK.downloadProxies(), timeoutMs: UPDATE_CHECK.CONFIG.DOWNLOAD_TIMEOUT_MS });
-
-          const integrity = verifyInstallerIntegrity(installerPath, release.sha256);
-          if (!integrity.ok) {
-            hooks.clearWindowProgress();
-            dialog.showErrorBox(
-              t('error.integrityCheckFailed'),
-              t('error.integrityCheckFailedMessage', { reason: integrity.reason })
-            );
-            return;
-          }
-
-          if (isPortable()) {
-            const folder = path.dirname(installerPath);
-            shell.showItemInFolder(installerPath);
-            hooks.clearWindowProgress();
-            await dialog.showMessageBox(mainWindow, {
-              type: 'info',
-              title: t('dialog.shellUpdate.portableTitle'),
-              message: t('dialog.shellUpdate.portableMessage'),
-              detail: t('dialog.shellUpdate.portableDetail', { folder })
-            });
-          } else {
-            const verifyDesc = integrity.verified
-              ? t('dialog.shellUpdate.verifyPassed', { hash: integrity.actual.slice(0, 16) })
-              : t('dialog.shellUpdate.verifyLocal', { hash: integrity.actual ? integrity.actual.slice(0, 16) : t('dialog.updateCheck.unknownVersion') });
-            const confirmInstall = await dialog.showMessageBox(mainWindow, {
-              type: 'question',
-              title: t('dialog.shellUpdate.confirmTitle'),
-              message: t('dialog.shellUpdate.confirmMessage', { version: remoteShell }),
-              detail: t('dialog.shellUpdate.confirmDetail', { verify: verifyDesc }),
-              buttons: [t('dialog.shellUpdate.installNow'), t('dialog.shellUpdate.installLater')],
-              defaultId: 0,
-              cancelId: 1
-            });
-            if (confirmInstall.response !== 0) {
-              hooks.clearWindowProgress();
-              return;
-            }
-            hooks.setWindowProgress(t('dialog.progress.launchInstaller'));
-            hooks.killProcessTree();
-            try {
-              if (typeof app.releaseSingleInstanceLock === 'function') {
-                app.releaseSingleInstanceLock();
-              }
-            } catch (lockErr) {
-              console.warn(`[shell-update] 释放单实例锁失败: ${lockErr.message}`);
-            }
-            if (!/\.exe$/i.test(installerPath)) {
-              dialog.showErrorBox(t('error.nsisInstallFailed'), 'refusing to run a non-exe installer');
-              hooks.clearWindowProgress();
-              return;
-            }
-            try {
-              const installer = spawn(installerPath, [], { detached: true, stdio: 'ignore' });
-              installer.unref();
-            } catch (err) {
-              dialog.showErrorBox(t('error.nsisInstallFailed'), String(err.message || err));
-              hooks.clearWindowProgress();
-              return;
-            }
-            hooks.clearWindowProgress();
-            hooks.setQuitting();
-            app.exit(0);
-            return;
-          }
+        const versionLabel = remoteShell || t('dialog.updateCheck.unknownVersion');
+        const choice = await dialog.showMessageBox(mainWindow, {
+          type: 'info',
+          title: t('dialog.shellUpdate.manualTitle'),
+          message: t('dialog.shellUpdate.manualMessage', { version: versionLabel }),
+          detail: t('dialog.shellUpdate.manualDetail'),
+          buttons: [t('dialog.shellUpdate.openRepo'), t('dialog.common.close')],
+          defaultId: 0,
+          cancelId: 1
+        });
+        if (choice.response === 0) {
+          shell.openExternal(UPDATE_CHECK.CONFIG.REPO_URL);
         }
+        hooks.clearWindowProgress();
       }
 
       if (coreInfo.needsUpdate && options.updateCore) {
@@ -358,8 +264,7 @@ function createUpdateFlow({
   return {
     runUpdateCheck,
     revertToFactoryRuntime,
-    cleanupOldBrokenRuntimeDirs,
-    isPortable
+    cleanupOldBrokenRuntimeDirs
   };
 }
 

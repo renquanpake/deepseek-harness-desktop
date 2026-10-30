@@ -529,7 +529,6 @@ const presetPlugins = createPresetPlugins({
 const { readFactoryPresetPluginNames } = presetPlugins;
 
 const updateFlow = createUpdateFlow({
-  app,
   dialog,
   shell,
   getMainWindow: () => mainWindow,
@@ -537,8 +536,6 @@ const updateFlow = createUpdateFlow({
   getCurrentDshVersion,
   getShellVersion,
   localRuntimeDir: LOCAL_RUNTIME_DIR,
-  portableMarkerDir: DSH_PORTABLE_MARKER_DIR,
-  getPortableDataRoot: () => portableLayout.getDataRoot(),
   getBundledNodeExe,
   getBundledPnpmCjs,
   preset: presetPlugins,

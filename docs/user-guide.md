@@ -1,31 +1,48 @@
 # 用户指南
 
-本指南适用于 `DeepSeek Harness` 0.3.0 桌面外壳。界面菜单默认自动隐藏，按 `Alt` 显示菜单栏。
+本指南适用于 `DeepSeek Harness` 0.3.1 桌面外壳。界面菜单默认自动隐藏，按 `Alt` 显示菜单栏。
 
 ## 1. 安装与首次启动
 
 ### 系统要求
 
 - Windows 10 或 Windows 11，x64。
-- 安装版不需要单独安装 Node.js。
+- 需要 Git 与 Node.js 18+（推荐 22）；用 `一键部署.bat` 时缺失会提示用 winget 安装。
 - 使用 Worktree 沙箱需要系统可执行 `git`，并且目标目录是 Git 仓库。
 - 使用 WSL2 引擎需要 Windows 已安装 WSL2、默认发行版内有 Node.js 与 npx。
 
 ### 安装
 
-运行 `DeepSeek Harness Setup 0.3.0.exe`。安装器为单文件一键安装、当前用户级安装，默认创建桌面快捷方式和开始菜单快捷方式，不提供安装目录选择。
+下载仓库根目录的 `一键部署.bat`，双击后选择部署目录，脚本会自动拉取代码、安装依赖并准备内置内核。
 
-当前安装包没有做 Windows 代码签名，SmartScreen 可能显示未知发布者提示。签名状态见 `docs/release.md`。
+也可以在终端执行：
+
+```powershell
+git clone https://github.com/renquanpake/deepseek-harness-desktop.git
+cd deepseek-harness-desktop
+npm ci
+npm run runtime:prepare
+npm start
+```
 
 ### 首次启动
 
-1. 双击桌面快捷方式启动。
+1. 双击部署目录里的 `一键启动.bat` 启动。
 2. 启动页会显示连接、插件同步和 Token 校验提示。
 3. 后端通常在数秒内就绪；最长等待 30 秒。
 4. 8 秒后启动页会出现「环境自动体检」入口，可手动触发自愈。
 5. 进入工作台后，按 DSH 界面提示配置 DeepSeek API Key。
 
 首次启动会在 `%USERPROFILE%\.dsh` 创建数据目录，包括 `profiles/web` 插件配置和后续的 `local-runtime` 热更新内核。
+
+### 一键部署（新用户）
+
+1. 从仓库根目录下载 `一键部署.bat`。
+2. 双击运行，按提示输入部署目录（直接回车使用 `%USERPROFILE%\DeepSeek-Harness`）。
+3. 脚本自动检查 Git / Node.js、克隆或更新代码、安装依赖、准备内置内核，完成后询问是否启动。
+4. 之后双击部署目录内的 `一键启动.bat` 即可日常启动。
+
+脚本不会覆盖非空且不属于本仓库的目录，重复运行会改为 `git pull` 更新。
 
 ### 窗口与退出
 
@@ -76,7 +93,7 @@ Windows 版可以把内置的 `dsh` 命令注册到当前用户 PATH：
 - 修复场景：移动安装目录或 `dsh.cmd` 被删除后，再次点「安装 / 修复」会重写启动器。
 - 移除：点「移除 dsh 命令行」，会删除 `dsh.cmd` 并只清理对应的 PATH 条目，其他条目保持不变。
 - PATH 变更对新开的终端生效，已打开的终端需要重新启动。
-- 启动器指向内置运行时，安装包内 `dsh-runtime` 缺失时会提示安装失败，不会写入坏掉的快捷方式。
+- 启动器指向内置运行时，`dsh-runtime` 缺失时会提示安装失败，不会写入坏掉的快捷方式。
 
 ### 单实例
 
@@ -183,8 +200,7 @@ DeepSeek Harness\
 ### 注意事项
 
 - `portable-data` 不可写时，外壳会回退到 `%USERPROFILE%\.dsh`，控制台输出 `[portable]` 警告。
-- 当前 `electron-builder` 配置只生成 NSIS 安装包，没有配置 Portable 目标；便携目录需要自行准备。
-- 便携模式更新外壳时，更新器会把安装包显示在资源管理器中，由用户覆盖旧文件；`portable-data` 不会被删除。
+- 便携目录需要自行在程序目录旁创建 `portable-data`；`portable-data` 不会被更新流程删除。
 
 ## 5. 全局快捷键与剪贴板注入
 
@@ -215,7 +231,7 @@ DeepSeek Harness\
 
 「引擎与更新」中提供两种运行引擎：
 
-- 「运行引擎：Windows 原生模式」：默认模式，使用安装包内置或热更新的 DSH 内核，速度最快。
+- 「运行引擎：Windows 原生模式」：默认模式，使用内置或热更新的 DSH 内核，速度最快。
 - 「运行引擎：WSL2 兼容模式」：通过 `wsl.exe` 在默认发行版内运行 `npx --yes @deepseek-ai/dsh`，适合依赖 Linux 工具链的场景。
 
 切换引擎会重启后端并重新加载页面。
@@ -225,7 +241,7 @@ DeepSeek Harness\
 - 仅在 Windows 主机可用；其他系统选择后会提示并回到原生模式。
 - 需要 WSL2、默认发行版、`bash`、Node.js、npx 和可用网络。
 - 工作区路径会转换为 `/mnt/<盘符>/...`。
-- 不使用安装包内置 `dsh-runtime`，也不参与本地内核热更新和 15 秒看门狗。
+- 不使用内置 `dsh-runtime`，也不参与本地内核热更新和 15 秒看门狗。
 - 每次启动都通过 npx 获取内核，首次启动可能较慢。
 
 ### 状态持久化
@@ -245,24 +261,23 @@ DeepSeek Harness\
 
 DSH 内核通过国内镜像安装到 `%USERPROFILE%\.dsh\local-runtime`，安装完成后自动重启后端。
 
-- 使用安装包内置的 Node.js 与 pnpm 执行安装。
+- 使用内置的 Node.js 与 pnpm 执行安装。
 - 同步出厂预置插件依赖。
 - 启动后由 15 秒看门狗检查；失败会隔离新内核并回滚到出厂内核。
 - 可随时通过「引擎与更新」→「回退至出厂内置内核」手动回退。
 
 ### 外壳更新
 
-外壳更新来自 GitHub Release，下载官方安装包并校验 SHA-256。
+检测到新版本时只提示版本号并提供「打开仓库」，由用户重新运行 `一键部署.bat` 完成更新。
 
-- 安装版：确认后启动 NSIS 安装程序，当前窗口退出。
-- 便携版：只下载并显示安装包位置，由用户覆盖旧文件。
-- 校验失败的文件会被立即删除，更新中止。
-- Release 没有提供 SHA-256 时，界面只显示本地计算指纹，并由用户确认是否继续。
+- 更新过程：`git pull` → `npm ci` → `npm run runtime:prepare` → 重启应用。
+- 用户数据（API Key、工作区、`%USERPROFILE%\.dsh`）不会被清除。
+- 外壳不接受自动降级，`package.json` 版本落后时不会提示更新。
 
 ### 回滚
 
 - 内核：菜单「回退至出厂内置内核」，或等待看门狗自动回滚。
-- 外壳：重新安装上一版安装包。用户数据位于 `.dsh` 或 `portable-data`，覆盖安装不会删除。
+- 外壳：在部署目录执行 `git checkout <上一个 tag>`，再执行 `npm ci` 与 `npm run runtime:prepare`；用户数据位于 `.dsh` 或 `portable-data`，不会被清除。
 
 自动更新只接受更高的语义化版本，不能通过发布旧版本让客户端自动降级。
 
@@ -270,9 +285,7 @@ DSH 内核通过国内镜像安装到 `%USERPROFILE%\.dsh\local-runtime`，安�
 
 ### 卸载
 
-打开 Windows「设置」→「应用」→「已安装的应用」，找到 `DeepSeek Harness` 并卸载。安装器为当前用户级安装，通常不需要管理员权限。
-
-卸载程序不会删除用户数据。
+外壳没有安装程序，直接删除部署目录即可卸载。用户数据位于 `%USERPROFILE%\.dsh` 与 Electron 用户数据目录，需要时手动清理。
 
 ### 数据位置
 

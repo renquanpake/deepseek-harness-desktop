@@ -1,6 +1,6 @@
 # 故障排查
 
-本文适用于 `DeepSeek Harness` 0.3.0 桌面外壳。命令以 Windows 默认安装为例；便携模式请把 `%USERPROFILE%\.dsh` 替换为 `<程序目录>\portable-data\.dsh`。
+本文适用于 `DeepSeek Harness` 0.3.1 桌面外壳。命令以 Windows 默认安装为例；便携模式请把 `%USERPROFILE%\.dsh` 替换为 `<程序目录>\portable-data\.dsh`。
 
 菜单栏默认自动隐藏，按 `Alt` 可显示。应用内菜单名为「引擎与更新」；部分历史弹窗文案仍写作「引擎与救援」，指向同一个菜单。
 
@@ -24,7 +24,7 @@
 
 ### 原因
 
-- 安装包内的 `dsh-runtime` 缺失、被杀毒软件隔离，或 `@deepseek-ai/dsh` 文件不完整。当前版本发现运行时会直接弹出「DSH 运行时缺失」并停止启动，不再通过 `npx` 联网兜底。
+- `dsh-runtime` 缺失、被杀毒软件隔离，或 `@deepseek-ai/dsh` 文件不完整。当前版本发现运行时会直接弹出「DSH 运行时缺失」并停止启动，不再通过 `npx` 联网兜底。
 - 认证 URL 未从后端 stdout 捕获，窗口加载了裸 `http://127.0.0.1:<端口>`，后端返回 401。
 - 热更新内核损坏，或 `.dsh/profiles/web` 中的插件配置损坏。
 - 端口被占用且连续探测失败，或 WSL2 环境不可用。
@@ -61,7 +61,7 @@ dir "%USERPROFILE%\.dsh"
 [dsh-auth] 成功捕获启动认证 URL: ...
 ```
 
-如果弹出「DSH 运行时缺失」，说明安装包内的 `dsh-runtime` 不可用。重新安装应用，或在源码目录执行：
+如果弹出「DSH 运行时缺失」，说明 `dsh-runtime` 不可用。在部署目录执行：
 
 ```bash
 npm run runtime:prepare
@@ -162,7 +162,7 @@ node -p "require(process.env.USERPROFILE + '/.dsh/local-runtime/node_modules/@de
 按影响从轻到重处理：
 
 - 「引擎与更新」→「环境自动体检与自愈」：清除 `.broken-marker.json`、清理死锁并重启。
-- 「引擎与更新」→「回退至出厂内置内核」：删除 `local-runtime` 与全部隔离目录，回到安装包自带内核。
+- 「引擎与更新」→「回退至出厂内置内核」：删除 `local-runtime` 与全部隔离目录，回到随应用下载的内置内核。
 - 「引擎与更新」→「检查更新」：重新安装内核后再观察。
 
 ### 看门狗行为

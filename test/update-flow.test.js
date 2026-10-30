@@ -40,6 +40,7 @@ function makeHarness(t, options = {}) {
   const dialogs = [];
   const errors = [];
   const folders = [];
+  const opened = [];
   const calls = {
     restart: 0,
     kill: 0,
@@ -100,7 +101,10 @@ function makeHarness(t, options = {}) {
   const flow = loadUpdateFlow(options.modules).createUpdateFlow({
     app,
     dialog,
-    shell: { showItemInFolder: (file) => folders.push(file), openExternal: () => {} },
+    shell: {
+      showItemInFolder: (file) => folders.push(file),
+      openExternal: (url) => opened.push(url)
+    },
     getMainWindow: () => ({}),
     t: translate,
     getCurrentDshVersion: () => options.currentCore || { version: '0.1.0', source: 'bundled' },
@@ -114,7 +118,7 @@ function makeHarness(t, options = {}) {
     hooks
   });
 
-  return { flow, root, localRuntimeDir, dialogs, errors, folders, calls };
+  return { flow, root, localRuntimeDir, dialogs, errors, folders, opened, calls };
 }
 
 test('cleanupOldBrokenRuntimeDirs keeps the newest entries and removes the rest', (t) => {
@@ -134,17 +138,6 @@ test('cleanupOldBrokenRuntimeDirs keeps the newest entries and removes the rest'
 
   const remaining = fs.readdirSync(parent).filter((name) => name.startsWith('local-runtime.broken.'));
   assert.deepStrictEqual(remaining.sort(), names.slice(2).sort());
-});
-
-test('isPortable detects portable data root and marker file', (t) => {
-  const portable = makeHarness(t, { portableRoot: '/portable' });
-  assert.strictEqual(portable.flow.isPortable(), true);
-
-  const marked = makeHarness(t);
-  fs.mkdirSync(path.join(marked.root, 'app'), { recursive: true });
-  assert.strictEqual(marked.flow.isPortable(), false);
-  fs.mkdirSync(path.join(marked.root, 'app', 'portable-data'), { recursive: true });
-  assert.strictEqual(marked.flow.isPortable(), true);
 });
 
 test('revertToFactoryRuntime removes the hot runtime, restarts and reports success', async (t) => {
@@ -233,89 +226,47 @@ test('cancelling the update dialog performs no mutation', async (t) => {
   assert.strictEqual(harness.calls.exit, 0);
 });
 
-test('shell update stops before install when the hash does not match', async (t) => {
+test('shell update points users at the repository instead of running an installer', async (t) => {
   const harness = makeHarness(t, {
     messageBoxResponse: { response: 0 },
     modules: {
       updateCheck: {
         checkCoreVersion: async () => '0.1.0',
         checkShellVersion: async () => '0.3.0',
-        checkReleaseAssets: async () => ({
-          installerUrl: 'https://example.com/DeepSeek-Harness-Setup.exe',
-          sha256: 'deadbeef'
-        })
-      },
-      updater: {
-        downloadWithProxies: async () => {},
-        verifyInstallerIntegrity: () => ({ ok: false, reason: 'hash-mismatch' })
+        checkReleaseAssets: async () => {
+          throw new Error('installer assets must not be fetched');
+        }
       }
     }
   });
 
   await harness.flow.runUpdateCheck(false);
 
-  assert.strictEqual(harness.errors.length, 1);
-  assert.strictEqual(harness.errors[0].title, 'error.integrityCheckFailed');
+  assert.strictEqual(harness.errors.length, 0);
   assert.strictEqual(harness.calls.exit, 0);
   assert.strictEqual(harness.calls.restart, 0);
+  assert.strictEqual(harness.opened.length, 1);
+  assert.match(harness.opened[0], /github\.com\/renquanpake\/deepseek-harness-desktop/);
+  const dialog = harness.dialogs[harness.dialogs.length - 1];
+  assert.strictEqual(dialog.message, 'dialog.shellUpdate.manualMessage:{"version":"0.3.0"}');
 });
 
-test('shell update refuses installer urls without an exe name', async (t) => {
+test('closing the shell update notice opens nothing', async (t) => {
   const harness = makeHarness(t, {
-    messageBoxResponse: { response: 0 },
+    messageBoxResponse: { response: 1 },
     modules: {
       updateCheck: {
         checkCoreVersion: async () => '0.1.0',
         checkShellVersion: async () => '0.3.0',
-        checkReleaseAssets: async () => ({
-          installerUrl: 'https://example.com/payload.bat',
-          sha256: 'deadbeef'
-        })
-      },
-      updater: {
-        downloadWithProxies: async () => {
-          throw new Error('must not download');
-        },
-        verifyInstallerIntegrity: () => ({ ok: true, verified: true, actual: 'a'.repeat(64) })
+        checkReleaseAssets: async () => null
       }
     }
   });
 
   await harness.flow.runUpdateCheck(false);
 
-  assert.strictEqual(harness.errors.length, 1);
-  assert.strictEqual(harness.errors[0].title, 'error.integrityCheckFailed');
+  assert.strictEqual(harness.opened.length, 0);
   assert.strictEqual(harness.calls.exit, 0);
-});
-
-test('portable shell update reveals the installer instead of running it', async (t) => {
-  const harness = makeHarness(t, {
-    portableRoot: '/portable',
-    messageBoxResponse: { response: 0 },
-    modules: {
-      updateCheck: {
-        checkCoreVersion: async () => '0.1.0',
-        checkShellVersion: async () => '0.3.0',
-        checkReleaseAssets: async () => ({
-          installerUrl: 'https://example.com/DeepSeek-Harness-Setup.exe',
-          sha256: 'deadbeef'
-        })
-      },
-      updater: {
-        downloadWithProxies: async () => {},
-        verifyInstallerIntegrity: () => ({ ok: true, verified: true, actual: 'a'.repeat(64) })
-      }
-    }
-  });
-
-  await harness.flow.runUpdateCheck(false);
-
-  assert.strictEqual(harness.folders.length, 1);
-  assert.ok(harness.folders[0].endsWith('DeepSeek-Harness-Setup.exe'));
-  assert.strictEqual(harness.calls.exit, 0);
-  assert.strictEqual(harness.calls.restart, 0);
-  const portableDialog = harness.dialogs[harness.dialogs.length - 1];
-  assert.strictEqual(portableDialog.message, 'dialog.shellUpdate.portableMessage');
 });
 
 test('concurrent update checks collapse into a single run', async (t) => {

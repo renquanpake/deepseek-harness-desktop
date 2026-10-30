@@ -7,22 +7,29 @@
 
 ---
 
-## 🚀 极速上手与构建指南
+## 🚀 部署与更新
 
-### 方式一：源码一键启动（免打包直接运行）
-1. 在项目根目录双击 **`一键启动.bat`**。
-2. 脚本将自动连接国内镜像（npmmirror）、配置环境并直接拉起暗黑原生桌面端。
-3. 启动期展示轻量过渡加载屏（`splash.html`），服务就绪后秒级平滑进入工作台，告别外部 Edge/Chrome 弹窗与 401 认证黑屏。
-4. 在界面中配置您的 DeepSeek API Key，即可开启流畅的 AI 协作。
+### 一键部署（推荐）
 
-### 方式二：本地一键生成 Windows 安装包
-1. 在项目根目录双击 **`一键打包及安装.bat`**。
-  2. 脚本全自动配置国内全链路镜像并在 `dist/` 目录下生成 `DeepSeek Harness Setup 0.3.0.exe` 安装包。
-3. 双击生成的 `.exe` 即可像普通 Windows 软件一样安装使用。
+只需下载 **`一键部署.bat`**，双击后输入或回车确认部署目录，脚本会自动完成：
 
-### 方式三：GitHub Actions 云端全自动打包
-* 本项目已配置自动化 CI/CD 流程（`.github/workflows/build.yml`）。
-* 代码推送到 GitHub 仓库并打上版本标签（如 `v0.3.0`）后，GitHub Actions 将自动完成云端构建并发布正式的 Release 安装包及 SHA-256 校验清单。
+1. 检查 Git 与 Node.js（要求 Node 18+，推荐 22）；缺失时提示用 winget 自动安装
+2. 克隆仓库到指定目录；目录里已有部署时改为 `git pull` 更新
+3. 通过 npmmirror 安装依赖与 Electron 二进制
+4. 下载内置 DSH 内核与出厂插件（`runtime:prepare`）
+5. 询问是否立即启动
+
+目标目录非空且不是本仓库时会直接中止，不会覆盖已有文件。
+
+### 日常启动
+
+双击部署目录里的 **`一键启动.bat`**，或在该目录执行 `npm start`。启动期展示轻量过渡加载屏，服务就绪后进入工作台，在界面里配置 DeepSeek API Key 即可使用。
+
+### 更新
+
+- **外壳**：重新运行 `一键部署.bat`，脚本会 `git pull` 并同步依赖与内核。
+- **内核**：菜单「引擎与更新」→「检查更新」，热更新 DSH 内核并自动回滚。
+- 应用内检测到外壳新版本时只弹出提示并提供仓库入口，不再下载安装包。
 
 ---
 
@@ -72,7 +79,7 @@ npm run runtime:prepare
 # 3. 启动开发模式
 npm start
 
-# 4. 静态检查与全量测试（覆盖自愈、Token 捕获、IPC 鉴权与打包清单校验）
+# 4. 静态检查与全量测试（覆盖自愈、Token 捕获与 IPC 鉴权）
 npm run lint
 npm test
 
@@ -81,9 +88,6 @@ npm run test:coverage
 
 # 5. 执行 Electron 端到端测试（需要图形环境，无桌面时用 xvfb-run）
 npm run test:e2e
-
-# 6. 打包生成 Windows 安装包
-npm run dist
 ```
 
 端到端测试通过 `DSH_E2E=1` 与 `DSH_E2E_BACKEND_URL` 指向本地夹具服务，只接受 `127.0.0.1`/`localhost` 的 HTTP 地址，用于验证窗口启动、preload 桥接、CSP 注入与外链拦截；CI 在 `ubuntu-latest` 上以 `xvfb-run` 执行。

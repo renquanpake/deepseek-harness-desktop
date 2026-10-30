@@ -96,18 +96,10 @@
       "updateNow": "Update Now"
     },
     "shellUpdate": {
-      "unavailableTitle": "Shell Update",
-      "unavailableMessage": "Unable to get the download URL for the latest shell installer. Please try again later or download the installer manually.",
-      "portableTitle": "Portable Edition Update",
-      "portableMessage": "The portable edition update has been downloaded",
-      "portableDetail": "Extract or overwrite the old installation files in {folder}. User data is stored in portable-data and will not be lost.",
-      "confirmTitle": "Install Client Update",
-      "confirmMessage": "The desktop shell update package (v{version}) is ready. Start the installer now?",
-      "confirmDetail": "{verify}\nThe current window will close automatically after the installer starts.",
-      "verifyPassed": "✓ Official SHA-256 hash verification passed ({hash}...)",
-      "verifyLocal": "Local SHA-256 fingerprint: {hash}...",
-      "installNow": "Install Now",
-      "installLater": "Install Manually Later"
+      "manualTitle": "New shell version available",
+      "manualMessage": "Shell {version} has been released. Re-run the deployment script to update.",
+      "manualDetail": "Run 一键部署.bat again from the repository root; it pulls the latest code, refreshes dependencies and prepares the runtime. Restart the app afterwards. API keys and workspaces are preserved.",
+      "openRepo": "Open repository"
     },
     "hotUpdate": {
       "successTitle": "Hot Update Successful",
@@ -144,9 +136,7 @@
     },
     "progress": {
       "hotUpdateCore": "Hot-updating DSH core via domestic mirror...",
-      "syncPresets": "Syncing factory preset plugins ({count} items)...",
-      "downloadShell": "Downloading shell update ({percent}%)...",
-      "launchInstaller": "Launching installer..."
+      "syncPresets": "Syncing factory preset plugins ({count} items)..."
     },
     "backgroundClose": {
       "title": "Hide to system tray",
@@ -197,9 +187,6 @@
     "backendStartFailed": "Failed to start dsh backend",
     "backendCrashLoop": "The backend crashed repeatedly. Automatic restart has been stopped.",
     "autoUpdateFailed": "Automatic update failed",
-    "nsisInstallFailed": "Failed to launch NSIS installer",
-    "integrityCheckFailed": "Installer Security Verification Failed",
-    "integrityCheckFailedMessage": "Shell update package SHA-256 verification failed (reason: {reason}). The file has been blocked and removed for security.",
     "runtimeMissing": "DSH Runtime Missing",
     "hotUpdateNodeMissing": "Bundled node.exe or pnpm.cjs is missing; the core hot update cannot run.",
     "hotUpdateFailed": "DSH core hot update failed. Please check your network or try again later."

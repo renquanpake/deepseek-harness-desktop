@@ -96,18 +96,10 @@
       "updateNow": "立即更新"
     },
     "shellUpdate": {
-      "unavailableTitle": "外壳更新",
-      "unavailableMessage": "无法获取最新外壳安装包下载地址，请稍后重试或手动下载安装包。",
-      "portableTitle": "便携版更新",
-      "portableMessage": "便携版更新已下载完成",
-      "portableDetail": "解压或覆盖 {folder} 中的旧安装文件即可。用户数据保存在 portable-data 中，不会丢失。",
-      "confirmTitle": "安装客户端更新",
-      "confirmMessage": "桌面外壳更新包 (v{version}) 已就绪，是否立即启动安装程序？",
-      "confirmDetail": "{verify}\n启动安装程序后当前窗口将自动关闭。",
-      "verifyPassed": "✓ 官方 SHA-256 哈希校验已通过 ({hash}...)",
-      "verifyLocal": "本地 SHA-256 指纹: {hash}...",
-      "installNow": "立即安装",
-      "installLater": "稍后手动安装"
+      "manualTitle": "有新的外壳版本",
+      "manualMessage": "外壳 {version} 已发布，需要重新运行一键部署脚本更新。",
+      "manualDetail": "到仓库根目录重新运行「一键部署.bat」会自动 git pull、更新依赖并准备内核。更新完成后重启应用即可，已配置的 API Key 和工作区不受影响。",
+      "openRepo": "打开仓库"
     },
     "hotUpdate": {
       "successTitle": "热更新成功",
@@ -144,9 +136,7 @@
     },
     "progress": {
       "hotUpdateCore": "正在通过国内镜像热更新 DSH 内核...",
-      "syncPresets": "正在同步出厂预置插件（{count} 项）...",
-      "downloadShell": "正在下载客户端外壳更新 ({percent}%)...",
-      "launchInstaller": "正在启动安装程序..."
+      "syncPresets": "正在同步出厂预置插件（{count} 项）..."
     },
     "backgroundClose": {
       "title": "隐藏到系统托盘",
@@ -197,9 +187,6 @@
     "backendStartFailed": "dsh 后端启动失败",
     "backendCrashLoop": "后端连续崩溃，已停止自动重启。",
     "autoUpdateFailed": "自动更新失败",
-    "nsisInstallFailed": "NSIS 安装启动失败",
-    "integrityCheckFailed": "安装包安全校验未通过",
-    "integrityCheckFailedMessage": "外壳更新包 SHA-256 校验失败（原因: {reason}），文件已被安全拦截并清理。",
     "runtimeMissing": "DSH 运行时缺失",
     "hotUpdateNodeMissing": "内置 node.exe 或 pnpm.cjs 缺失，无法执行内核热更新",
     "hotUpdateFailed": "DSH 内核热更新失败，请检查网络或稍后重试"
