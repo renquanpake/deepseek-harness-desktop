@@ -65,6 +65,9 @@ if exist "dsh-runtime\node_modules\@deepseek-ai\dsh" (
     call npm run runtime:prepare
     if errorlevel 1 goto :runtime_failed
 )
+echo       校验内核与外壳的兼容性...
+node scripts/check-runtime-compat.js
+if errorlevel 1 goto :runtime_incompatible
 
 echo.
 echo [4/4] 部署完成。
@@ -130,6 +133,10 @@ echo [错误] 依赖安装失败，请检查网络或 npm 镜像配置。
 goto :fail
 :runtime_failed
 echo [错误] 内置内核准备失败，请检查网络后重新运行本脚本。
+goto :fail
+:runtime_incompatible
+echo [错误] 下载到的 DSH 内核超出外壳已验证的版本范围，已停止部署。
+echo        请先更新外壳代码，或固定 DSH_VERSION 后重试。
 goto :fail
 
 :fail

@@ -2,6 +2,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  resolveDshEntry,
+  resolveDshCommand,
+  readDshVersion
+} = require('../lib/dsh-adapter');
 
 function createRuntimeLayout({ localRuntimeDir, appDir = __dirname }) {
   function getBundledRuntimeDir() {
@@ -16,20 +21,15 @@ function createRuntimeLayout({ localRuntimeDir, appDir = __dirname }) {
   }
 
   function getLocalRuntimeDshCli() {
-    return path.join(localRuntimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'bin', 'dsh.mjs');
+    return resolveDshEntry(localRuntimeDir) || path.join(localRuntimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'bin', 'dsh.mjs');
   }
 
   function isLocalRuntimeUsable() {
-    return fs.existsSync(getLocalRuntimeDshCli());
+    return Boolean(resolveDshEntry(localRuntimeDir) || resolveDshCommand(localRuntimeDir));
   }
 
   function getLocalDshVersion() {
-    const pkgPath = path.join(localRuntimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json');
-    try {
-      return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version || null;
-    } catch {
-      return null;
-    }
+    return readDshVersion(localRuntimeDir);
   }
 
   function getBundledNodeExe() {
@@ -64,13 +64,7 @@ function createRuntimeLayout({ localRuntimeDir, appDir = __dirname }) {
 
   function getCurrentDshVersion(runtimeDir) {
     const source = path.resolve(runtimeDir) === path.resolve(localRuntimeDir) ? 'hot-update' : 'factory';
-    const pkgPath = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json');
-    try {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-      return { version: pkg.version || 'unknown', source };
-    } catch {
-      return { version: 'unknown', source };
-    }
+    return { version: readDshVersion(runtimeDir) || 'unknown', source };
   }
 
   return {

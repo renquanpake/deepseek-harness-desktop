@@ -189,6 +189,7 @@
     "autoUpdateFailed": "Automatic update failed",
     "runtimeMissing": "DSH Runtime Missing",
     "hotUpdateNodeMissing": "Bundled node.exe or pnpm.cjs is missing; the core hot update cannot run.",
-    "hotUpdateFailed": "DSH core hot update failed. Please check your network or try again later."
+    "hotUpdateFailed": "DSH core hot update failed. Please check your network or try again later.",
+    "hotUpdateUnsupported": "Core {version} is outside the verified range ({range}); the hot update was refused. Update the shell first."
   }
 }

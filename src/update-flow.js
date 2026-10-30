@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const UPDATE_CHECK = require('../lib/update-check');
 const { isNewer, decideUpdatePlan } = require('../lib/updater');
+const { isVersionSupported, describeSupportRange } = require('../lib/dsh-adapter');
 
 function createUpdateFlow({
   dialog,
@@ -21,6 +22,14 @@ function createUpdateFlow({
   let inFlight = false;
 
   async function installHotUpdateCore(targetVersion) {
+    if (targetVersion && !isVersionSupported(targetVersion)) {
+      throw new Error(
+        t('error.hotUpdateUnsupported', {
+          version: targetVersion,
+          range: describeSupportRange()
+        })
+      );
+    }
     console.log('[hot-update] 开始更新 DSH 内核至 ' + targetVersion);
     hooks.killProcessTree();
     const nodeExe = getBundledNodeExe();
@@ -235,26 +244,33 @@ function createUpdateFlow({
         UPDATE_CHECK.checkCoreVersion(),
         UPDATE_CHECK.checkShellVersion()
       ]);
+      const coreSupported = remoteCore ? isVersionSupported(remoteCore) : true;
+      if (remoteCore && !coreSupported) {
+        console.warn(
+          `[updater] 内核 ${remoteCore} 超出已验证范围 ${describeSupportRange()}，暂不提供热更新；请先更新外壳。`
+        );
+      }
+      const effectiveRemoteCore = coreSupported ? remoteCore : null;
       const coreInfo = {
         current: currentCore.version,
         source: currentCore.source === 'hot-update' ? '热更新内核' : '内置出厂内核',
-        needsUpdate: !!(remoteCore && isNewer(remoteCore, currentCore.version))
+        needsUpdate: !!(effectiveRemoteCore && isNewer(effectiveRemoteCore, currentCore.version))
       };
       const shellInfo = {
         current: currentShell,
         needsUpdate: !!(remoteShell && isNewer(remoteShell, currentShell))
       };
       const plan = decideUpdatePlan({
-        core: { currentVersion: currentCore.version, remoteVersion: remoteCore },
+        core: { currentVersion: currentCore.version, remoteVersion: effectiveRemoteCore },
         shell: { currentVersion: currentShell, remoteVersion: remoteShell }
       });
       if (plan.hasUpdate) {
-        const options = await showUpdateCheckResult(true, coreInfo, shellInfo, remoteCore, remoteShell);
+        const options = await showUpdateCheckResult(true, coreInfo, shellInfo, effectiveRemoteCore, remoteShell);
         if (options) {
-          await performAutoUpdate(coreInfo, shellInfo, remoteCore, remoteShell, options);
+          await performAutoUpdate(coreInfo, shellInfo, effectiveRemoteCore, remoteShell, options);
         }
       } else if (!silent) {
-        await showUpdateCheckResult(false, coreInfo, shellInfo, remoteCore, remoteShell);
+        await showUpdateCheckResult(false, coreInfo, shellInfo, effectiveRemoteCore, remoteShell);
       }
     } finally {
       inFlight = false;

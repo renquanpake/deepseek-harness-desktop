@@ -189,6 +189,7 @@
     "autoUpdateFailed": "自动更新失败",
     "runtimeMissing": "DSH 运行时缺失",
     "hotUpdateNodeMissing": "内置 node.exe 或 pnpm.cjs 缺失，无法执行内核热更新",
-    "hotUpdateFailed": "DSH 内核热更新失败，请检查网络或稍后重试"
+    "hotUpdateFailed": "DSH 内核热更新失败，请检查网络或稍后重试",
+    "hotUpdateUnsupported": "内核 {version} 超出已验证范围（{range}），已拒绝热更新。请先更新外壳版本。"
   }
 }

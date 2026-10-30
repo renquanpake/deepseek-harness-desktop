@@ -2,6 +2,12 @@
 
 const { decideRestart, MAX_CRASH_RESTARTS } = require('../lib/backend-lifecycle');
 const { isBackendReadyStatus } = require('../lib/readiness');
+const {
+  resolveDshEntry,
+  resolveDshCommand,
+  buildLaunchArgs,
+  parseAuthenticatedUrl
+} = require('../lib/dsh-adapter');
 const { runTaskkill } = require('../lib/secure-exec');
 
 // DSH 后端子进程生命周期 + local-runtime 启动看门狗/熔断。
@@ -201,10 +207,7 @@ function createBackend(deps) {
     const runtimeDir = getRuntimeDir();
     const port = getPort();
     const workspaceDir = getWorkspaceDir();
-    const args = ['web', '--no-open', '--port', String(port)];
-    if (isSafeMode()) {
-      args.push('--safe-mode');
-    }
+    const args = buildLaunchArgs({ port, safeMode: isSafeMode() });
     const env = buildBackendEnv();
     const isWindows = process.platform === 'win32';
     watchedRuntimeExitCode = null;
@@ -213,9 +216,9 @@ function createBackend(deps) {
     if (getEngine() === 'wsl2' && isWindows) {
       const rawWslWorkspace = toWslPath(workspaceDir);
       const cleanWslWorkspace = rawWslWorkspace.replace(/^["']|["']$/g, '');
-      const safeFlag = isSafeMode() ? '--safe-mode' : '';
       const safeWslWorkspace = "'" + cleanWslWorkspace.replace(/'/g, "'\\''") + "'";
-      const wslCmd = `cd ${safeWslWorkspace} && npx --yes @deepseek-ai/dsh web --no-open --port ${port} ${safeFlag}`;
+      const wslArgs = buildLaunchArgs({ port, safeMode: isSafeMode() }).join(' ');
+      const wslCmd = `cd ${safeWslWorkspace} && npx --yes @deepseek-ai/dsh ${wslArgs}`;
       dshProcess = spawn('wsl.exe', ['--', 'bash', '-lc', wslCmd], {
         stdio: 'pipe',
         windowsHide: true,
@@ -227,13 +230,8 @@ function createBackend(deps) {
         }
       });
     } else {
-      const dshCliJs = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'bin', 'dsh.mjs');
-      const dshCmd = path.join(
-        runtimeDir,
-        'node_modules',
-        '.bin',
-        isWindows ? 'dsh.cmd' : 'dsh'
-      );
+      const dshCliJs = resolveDshEntry(runtimeDir, fs);
+      const dshCmd = resolveDshCommand(runtimeDir, process.platform, fs);
       const bundledNode = getBundledNodeExe();
       const commonSpawnOpts = {
         cwd: workspaceDir,
@@ -242,10 +240,10 @@ function createBackend(deps) {
         windowsHide: true,
         detached: !isWindows
       };
-      if (bundledNode && fs.existsSync(dshCliJs)) {
+      if (bundledNode && dshCliJs) {
         dshProcess = spawn(bundledNode, [dshCliJs, ...args], commonSpawnOpts);
         useLocalRuntime = path.resolve(runtimeDir) === path.resolve(getLocalRuntimeDir());
-      } else if (fs.existsSync(dshCmd)) {
+      } else if (dshCmd) {
         dshProcess = spawn(dshCmd, args, {
           ...commonSpawnOpts,
           shell: isWindows
@@ -278,10 +276,14 @@ function createBackend(deps) {
         );
         console.log(`[dsh] ${logLine}`);
         stdoutAccumulator += line;
-        const match = stdoutAccumulator.match(/dsh web:\s*(https?:\/\/[^\s()]+)(?:[\r\n]|\s+\()/i);
-        if (match && match[1]) {
-          authenticatedBackendUrl = match[1].trim();
-          console.log(`[dsh-auth] 成功捕获启动认证 URL: ${describeBackendUrl(authenticatedBackendUrl)}`);
+        const lastNewline = stdoutAccumulator.lastIndexOf('\n');
+        if (lastNewline >= 0) {
+          const complete = stdoutAccumulator.slice(0, lastNewline);
+          const captured = parseAuthenticatedUrl(complete, { port });
+          if (captured) {
+            authenticatedBackendUrl = captured;
+            console.log(`[dsh-auth] 成功捕获启动认证 URL: ${describeBackendUrl(authenticatedBackendUrl)}`);
+          }
         }
         if (stdoutAccumulator.length > 20000) {
           stdoutAccumulator = stdoutAccumulator.slice(-5000);
@@ -294,6 +296,13 @@ function createBackend(deps) {
         const line = String(chunk);
         console.warn(`[dsh] ${line}`);
         sendRuntimeLog(line);
+        if (!authenticatedBackendUrl) {
+          const captured = parseAuthenticatedUrl(line, { port });
+          if (captured) {
+            authenticatedBackendUrl = captured;
+            console.log(`[dsh-auth] 从 stderr 捕获启动认证 URL: ${describeBackendUrl(authenticatedBackendUrl)}`);
+          }
+        }
       });
     }
 

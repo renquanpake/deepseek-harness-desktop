@@ -1,6 +1,6 @@
 # 故障排查
 
-本文适用于 `DeepSeek Harness` 0.3.1 桌面外壳。命令以 Windows 默认安装为例；便携模式请把 `%USERPROFILE%\.dsh` 替换为 `<程序目录>\portable-data\.dsh`。
+本文适用于 `DeepSeek Harness` 0.3.2 桌面外壳。命令以 Windows 默认安装为例；便携模式请把 `%USERPROFILE%\.dsh` 替换为 `<程序目录>\portable-data\.dsh`。
 
 菜单栏默认自动隐藏，按 `Alt` 可显示。应用内菜单名为「引擎与更新」；部分历史弹窗文案仍写作「引擎与救援」，指向同一个菜单。
 
@@ -375,6 +375,20 @@ wsl.exe -- bash -lc "curl -I http://127.0.0.1:3080"
 - 临时强制：设置 `DSH_BACKEND_CSP=enforce` 后重启应用，浏览器会按严格策略拦截；出现白屏就改回 `report` 并提交日志。
 - 完全关闭：`DSH_BACKEND_CSP=off`。
 - 该开关只影响后端 HTTP 主文档；`dsh-app://` 页面始终使用 `lib/app-protocol.js` 的完整策略。
+
+## 7.2 内核被判定不兼容
+
+症状：
+
+- 部署脚本报「下载到的 DSH 内核超出外壳已验证的版本范围」。
+- 「检查更新」不再提示新内核，控制台出现 `[updater] 内核 x.y.z 超出已验证范围`。
+
+原因与处理：
+
+- 外壳只支持 `lib/dsh-adapter.js` 里 `SUPPORTED_DSH_RANGE` 声明的范围，防止上游破坏性变更导致白屏。
+- 想继续用当前外壳：固定内核版本，例如 `set DSH_VERSION=0.2.1` 后重新执行 `npm run runtime:prepare`。
+- 想升级内核：先更新外壳代码，测试通过后由维护者抬高范围上限。
+- 手动体检：`node scripts/check-runtime-compat.js`。
 
 ## 8. 自愈流程
 

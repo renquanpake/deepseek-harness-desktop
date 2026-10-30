@@ -269,6 +269,42 @@ test('closing the shell update notice opens nothing', async (t) => {
   assert.strictEqual(harness.calls.exit, 0);
 });
 
+test('core versions outside the verified range are not offered', async (t) => {
+  const harness = makeHarness(t, {
+    messageBoxResponse: { response: 0 },
+    modules: {
+      updateCheck: {
+        checkCoreVersion: async () => '0.9.0',
+        checkShellVersion: async () => '0.2.1',
+        checkReleaseAssets: async () => null
+      }
+    }
+  });
+
+  await harness.flow.runUpdateCheck(true);
+
+  assert.strictEqual(harness.calls.pnpmAdds.length, 0);
+  assert.strictEqual(harness.calls.restart, 0);
+  assert.strictEqual(harness.dialogs.length, 0);
+});
+
+test('core versions inside the verified range are still offered', async (t) => {
+  const harness = makeHarness(t, {
+    messageBoxResponse: { response: 0 },
+    modules: {
+      updateCheck: {
+        checkCoreVersion: async () => '0.2.1',
+        checkShellVersion: async () => '0.2.1',
+        checkReleaseAssets: async () => null
+      }
+    }
+  });
+
+  await harness.flow.runUpdateCheck(true);
+
+  assert.deepStrictEqual(harness.calls.pnpmAdds, [['@deepseek-ai/dsh@0.2.1']]);
+});
+
 test('concurrent update checks collapse into a single run', async (t) => {
   let coreChecks = 0;
   const harness = makeHarness(t, {
