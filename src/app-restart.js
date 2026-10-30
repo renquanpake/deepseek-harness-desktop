@@ -10,14 +10,15 @@ function createRestartController({
   getPort,
   setPort,
   defaultPort = 3080,
-  authWaitMs = 1500,
+  authWaitMs = 10_000,
   pollMs = 100,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now = Date.now,
   onReady = () => {},
   rebuildMenus = () => {},
   operationLog = { append: () => {} },
-  logContext = () => ({})
+  logContext = () => ({}),
+  warn = console.warn
 }) {
   async function performRestart() {
     backend.markReady(false);
@@ -36,10 +37,17 @@ function createRestartController({
     operationLog.append(ready ? 'backend-ready' : 'backend-not-ready', { port: getPort() });
     if (ready) installAppProtocol();
 
-    if (ready && !backend.getAuthUrl()) {
-      const deadline = now() + authWaitMs;
-      while (!backend.getAuthUrl() && now() < deadline) {
-        await sleep(pollMs);
+    if (ready) {
+      let authUrl = backend.getAuthUrl();
+      if (!authUrl) {
+        const deadline = now() + authWaitMs;
+        while (!authUrl && now() < deadline) {
+          await sleep(pollMs);
+          authUrl = backend.getAuthUrl();
+        }
+        if (!authUrl) {
+          warn('[restart] 后端已就绪但未捕获认证 URL，将加载裸地址；出现 401 时请检查上游输出格式。');
+        }
       }
     }
 

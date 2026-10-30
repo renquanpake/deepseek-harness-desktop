@@ -7,6 +7,7 @@ const { createRestartController } = require('../src/app-restart');
 
 function makeHarness(options = {}) {
   const calls = [];
+  const warnings = [];
   const state = {
     port: 3080,
     authUrl: options.authUrl === undefined ? 'http://127.0.0.1:3090/?token=x' : options.authUrl,
@@ -52,10 +53,11 @@ function makeHarness(options = {}) {
     onReady: (url, port) => calls.push(['onReady', url, port]),
     rebuildMenus: () => calls.push(['rebuildMenus']),
     operationLog: { append: (type, data) => calls.push(['log', type, data]) },
-    logContext: () => ({ engine: 'win-native' })
+    logContext: () => ({ engine: 'win-native' }),
+    warn: (message) => warnings.push(message)
   });
 
-  return { controller, calls, state };
+  return { controller, calls, state, warnings };
 }
 
 test('restart picks a port, boots the backend and reports readiness', async () => {
@@ -146,4 +148,29 @@ test('stops waiting for the auth url at the deadline', async () => {
   assert.strictEqual(ready, true);
   assert.ok(probes >= 4, `expected several probes, got ${probes}`);
   assert.ok(probes <= 6, `deadline must bound probes, got ${probes}`);
+});
+
+test('warns when the backend is ready but never prints an auth url', async () => {
+  let clock = 0;
+  const harness = makeHarness({
+    authUrl: null,
+    authWaitMs: 300,
+    now: () => clock,
+    authProbe: () => null,
+    sleep: async () => {
+      clock += 100;
+    }
+  });
+
+  const ready = await harness.controller.performRestart();
+
+  assert.strictEqual(ready, true);
+  assert.strictEqual(harness.warnings.length, 1);
+  assert.match(harness.warnings[0], /未捕获认证 URL/);
+});
+
+test('does not warn when the auth url arrives in time', async () => {
+  const harness = makeHarness();
+  await harness.controller.performRestart();
+  assert.deepStrictEqual(harness.warnings, []);
 });

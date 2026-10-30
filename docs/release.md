@@ -1,6 +1,6 @@
 # 发布与更新
 
-本文说明 `DeepSeek Harness` 桌面外壳的版本模型、部署方式与更新流程。当前版本为 `0.3.2`。
+本文说明 `DeepSeek Harness` 桌面外壳的版本模型、部署方式与更新流程。当前版本为 `0.3.3`。
 
 ## 1. 版本模型
 
@@ -13,8 +13,8 @@
 
 ### 外壳版本
 
-- 当前为 `0.3.2`，定义在 `package.json`。
-- Git tag 使用 `v` 前缀，例如 `v0.3.2`。
+- 当前为 `0.3.3`，定义在 `package.json`。
+- Git tag 使用 `v` 前缀，例如 `v0.3.3`。
 - 仓库不再构建安装包，外壳更新以重新部署为准。
 
 ### 内置内核版本
@@ -88,7 +88,24 @@ npm run test:e2e
 - 热更新安装前会再校验一次目标版本，不符合范围时拒绝执行。
 - 上游发布新内核后，先在本地或 CI 验证启动、认证捕获、页面加载与插件加载，再把 `SUPPORTED_DSH_RANGE` 上限抬高并发布新外壳。
 
-`lib/dsh-adapter.js` 同时集中处理启动参数、`bin` 入口解析与认证 URL 解析，上游调整这些格式时只需改这一处。
+`lib/dsh-adapter.js` 同时集中处理启动参数、`bin` 入口解析与认证 URL 解析，上游调整这些格式时只需改这一处。上游 0.2.1-rc.5 的入口实际是 `node_modules/@deepseek-ai/dsh/lib/bin.js`，适配层读取 `bin` 字段后自动兼容，不再依赖旧的 `bin/dsh.mjs` 路径。
+
+### 上游契约检查
+
+```powershell
+npm run check:upstream -- --runtime-dir .\dsh-runtime
+```
+
+脚本会用真实的 `dsh web --no-open --port <空闲端口>` 启动内核，验证四件事：
+
+1. 启动后打印带 `token` 的认证 URL
+2. 无 token 访问 `/` 返回 401
+3. 带 token 的 URL 返回 3xx 并下发认证 Cookie
+4. 携带 Cookie 访问 `/` 返回 200 且内容是 Web 外壳
+
+任一步失败即以非零码退出。建议在抬高 `SUPPORTED_DSH_RANGE` 前，先对目标版本跑一次该检查；CI 可配置成夜间任务，安装 `@deepseek-ai/dsh@latest` 后执行。
+
+认证 URL 由上游在插件加载完成后才打印，外壳启动时最多等待 10 秒；超时会加载裸地址并输出警告，出现 401 时应优先运行上面的契约检查。
 
 ## 6. 回滚
 
