@@ -136,7 +136,8 @@
     },
     "progress": {
       "hotUpdateCore": "Hot-updating DSH core via domestic mirror...",
-      "syncPresets": "Syncing factory preset plugins ({count} items)..."
+      "syncPresets": "Syncing factory preset plugins ({count} items)...",
+      "verifyCore": "Verifying the new core startup and auth contract..."
     },
     "backgroundClose": {
       "title": "Hide to system tray",
@@ -190,6 +191,7 @@
     "runtimeMissing": "DSH Runtime Missing",
     "hotUpdateNodeMissing": "Bundled node.exe or pnpm.cjs is missing; the core hot update cannot run.",
     "hotUpdateFailed": "DSH core hot update failed. Please check your network or try again later.",
-    "hotUpdateUnsupported": "Core {version} is outside the verified range ({range}); the hot update was refused. Update the shell first."
+    "hotUpdateUnsupported": "Core {version} is outside the verified range ({range}); the hot update was refused. Update the shell first.",
+    "hotUpdateIncompatible": "The new core failed contract verification ({reason}); it was quarantined and the factory runtime was restored."
   }
 }

@@ -115,7 +115,8 @@ function makeHarness(t, options = {}) {
     getBundledNodeExe: () => '/usr/bin/node',
     getBundledPnpmCjs: () => '/usr/bin/pnpm.cjs',
     preset,
-    hooks
+    hooks,
+    verifyRuntime: options.verifyRuntime || (async () => ({ ok: true, steps: [] }))
   });
 
   return { flow, root, localRuntimeDir, dialogs, errors, folders, opened, calls };
@@ -303,6 +304,35 @@ test('core versions inside the verified range are still offered', async (t) => {
   await harness.flow.runUpdateCheck(true);
 
   assert.deepStrictEqual(harness.calls.pnpmAdds, [['@deepseek-ai/dsh@0.2.1']]);
+});
+
+test('a core that fails the contract check is quarantined and rolled back', async (t) => {
+  const harness = makeHarness(t, {
+    messageBoxResponse: { response: 0 },
+    verifyRuntime: async () => ({
+      ok: false,
+      steps: [{ name: 'authenticated index serves the web shell', ok: false, detail: '401' }]
+    }),
+    modules: {
+      updateCheck: {
+        checkCoreVersion: async () => '0.2.1',
+        checkShellVersion: async () => '0.2.1',
+        checkReleaseAssets: async () => null
+      }
+    }
+  });
+
+  await harness.flow.runUpdateCheck(true);
+
+  assert.strictEqual(harness.calls.pnpmAdds.length, 1);
+  assert.strictEqual(fs.existsSync(harness.localRuntimeDir), false, 'unverified core must be quarantined');
+  const broken = fs.readdirSync(path.dirname(harness.localRuntimeDir))
+    .filter((name) => name.startsWith('local-runtime.broken.'));
+  assert.strictEqual(broken.length, 1);
+  assert.strictEqual(harness.calls.restart, 1, 'rolls back to the factory runtime');
+  assert.strictEqual(harness.errors.length, 1);
+  assert.strictEqual(harness.errors[0].title, 'error.autoUpdateFailed');
+  assert.match(harness.errors[0].message, /hotUpdateIncompatible/);
 });
 
 test('concurrent update checks collapse into a single run', async (t) => {

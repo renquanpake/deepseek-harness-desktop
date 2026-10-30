@@ -5,6 +5,7 @@ const path = require('path');
 const UPDATE_CHECK = require('../lib/update-check');
 const { isNewer, decideUpdatePlan } = require('../lib/updater');
 const { isVersionSupported, describeSupportRange } = require('../lib/dsh-adapter');
+const { runContractCheck } = require('../lib/upstream-contract');
 
 function createUpdateFlow({
   dialog,
@@ -17,9 +18,45 @@ function createUpdateFlow({
   getBundledNodeExe,
   getBundledPnpmCjs,
   preset,
-  hooks
+  hooks,
+  verifyRuntime = async (runtimeDir) => runContractCheck({
+    runtimeDir,
+    timeoutMs: 120_000,
+    log: null
+  })
 }) {
   let inFlight = false;
+
+  function quarantineLocalRuntime(reason) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const brokenPath = `${localRuntimeDir}.broken.${stamp}`;
+    try {
+      if (fs.existsSync(localRuntimeDir)) {
+        fs.renameSync(localRuntimeDir, brokenPath);
+        console.warn(`[hot-update] 内核验证失败，已隔离到 ${brokenPath}`);
+        return brokenPath;
+      }
+    } catch (err) {
+      console.warn(`[hot-update] 隔离失败，改写坏标记: ${err.message}`);
+    }
+    try {
+      fs.mkdirSync(localRuntimeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(localRuntimeDir, '.broken-marker.json'),
+        JSON.stringify({ brokenVersion: null, reason, at: new Date().toISOString() }, null, 2)
+      );
+    } catch (err) {
+      console.warn(`[hot-update] 写入坏标记失败: ${err.message}`);
+    }
+    return null;
+  }
+
+  function describeVerdict(verdict) {
+    if (!verdict || !Array.isArray(verdict.steps)) return 'unknown';
+    const failed = verdict.steps.filter((step) => !step.ok);
+    if (!failed.length) return 'unknown';
+    return failed.map((step) => `${step.name}${step.detail ? ` (${step.detail})` : ''}`).join('; ');
+  }
 
   async function installHotUpdateCore(targetVersion) {
     if (targetVersion && !isVersionSupported(targetVersion)) {
@@ -53,6 +90,17 @@ function createUpdateFlow({
     if (!coreInstalled) {
       throw new Error(t('error.hotUpdateFailed'));
     }
+    hooks.setWindowProgress(t('dialog.progress.verifyCore'));
+    const verdict = await verifyRuntime(localRuntimeDir);
+    if (!verdict || !verdict.ok) {
+      const reason = describeVerdict(verdict);
+      quarantineLocalRuntime(reason);
+      hooks.setForceBundledRuntime(true);
+      hooks.resetLocalRuntimeBrokenUntil();
+      await hooks.restartWithCurrentConfig();
+      throw new Error(t('error.hotUpdateIncompatible', { reason }));
+    }
+
     const markerFile = path.join(localRuntimeDir, '.broken-marker.json');
     if (fs.existsSync(markerFile)) {
       try { fs.unlinkSync(markerFile); } catch {

@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { runContractCheck, findFreePort } = require('../scripts/check-upstream-contract');
+const { runContractCheck, findFreePort } = require('../lib/upstream-contract');
 
 const FAKE_BIN = `'use strict';
 const http = require('node:http');
