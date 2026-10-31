@@ -8,7 +8,7 @@
 - 主进程入口：`main.js`。
 - 渲染层桥接：`preload.js`。
 - 可信 URL 判定：`lib/trusted-url.js`（接受主窗口、精确 `splash.html`、后端端口、`dsh-app://app` 来源）。
-- 本次新增：`lib/app-protocol.js`、`lib/ipc-schema.js`、`lib/i18n.js`、`lib/python-runtime.js`、`lib/secure-exec.js`、`lib/readiness.js`、`lib/restart-guard.js`、`lib/update-manifest.js`、`lib/update-source-policy.js` 及其单测与本文档。
+- 核心模块：`lib/app-protocol.js`、`lib/ipc-schema.js`、`lib/i18n.js`、`lib/python-runtime.js`、`lib/secure-exec.js`、`lib/readiness.js`、`lib/restart-guard.js`、`lib/update-source-policy.js`。
 - 本次修改：`main.js`（IPC 契约校验、i18n、协议接线、更新源策略）、`lib/updater.js`、`prepare-runtime.js`、`package.json`。
 - 本次未修改：`preload.js`（窄桥接收敛列为后续目标）。
 
@@ -26,10 +26,8 @@
 | `src/portable-paths.js` | 便携数据根探测、子目录与 `.gitconfig` 准备、DSH_HOME 与环境叠加 |
 | `src/security.js` | 会话权限默认拒绝、麦克风白名单、webview 挂载拦截 |
 | `src/quit-confirmation.js` | 首次隐藏确认、退出前后端状态确认 |
-| `lib/update-trust.js` | 更新清单 Ed25519 验签与信任配置 |
 | `lib/cli-install.js`、`lib/win-user-path.js` | `dsh` 命令安装与用户 PATH 读写 |
 | `lib/crash-reporter.js`、`lib/operation-log.js` | 崩溃报告与操作日志 |
-| `lib/keybindings.js` | 快捷键配置读写与校验 |
 | `src/ui-menus.js` | 托盘、原生应用菜单、自修复入口 |
 | `src/update-flow.js` | 更新检查编排、回退出厂运行时、旧损坏目录清理 |
 | `src/ipc.js` | 全部 IPC handler 集中注册（含无参通道白名单） |

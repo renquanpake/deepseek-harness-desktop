@@ -250,7 +250,6 @@ test('main boots the e2e workspace, loads the backend and wires security', async
   assert.ok(state.shortcuts.includes('Alt+Space'));
   assert.ok(state.ipcHandles.includes('dsh:get-runtime-info'));
 
-  assert.strictEqual(fs.existsSync(path.join(userDataDir, 'keybindings.json')), true);
   const operations = fs.readFileSync(path.join(userDataDir, 'logs', 'operations.jsonl'), 'utf8');
   assert.match(operations, /"type":"e2e-backend"/);
 

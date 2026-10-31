@@ -220,3 +220,35 @@ test('readProfileManifest tolerates missing or broken files', (t) => {
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ dsh: { profile: { bundles: [] } } }));
   assert.deepStrictEqual(readProfileManifest(root).dsh.profile.bundles, []);
 });
+
+const { capabilityCacheKey, readCapabilityCache, writeCapabilityCache } = require('../lib/dsh-adapter');
+
+test('capability cache round-trips and invalidates on key change', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-caps-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const entry = path.join(root, 'bin.js');
+  fs.writeFileSync(entry, '// x');
+  const cachePath = path.join(root, 'cache.json');
+  const key = capabilityCacheKey(entry);
+  assert.ok(key);
+
+  const caps = { supportsNoOpen: true, supportsPort: false };
+  assert.strictEqual(writeCapabilityCache(cachePath, key, caps), true);
+  assert.deepStrictEqual(readCapabilityCache(cachePath, key), caps);
+  assert.strictEqual(readCapabilityCache(cachePath, 'other-key'), null);
+
+  const broken = path.join(root, 'broken.json');
+  fs.writeFileSync(broken, '{bad');
+  assert.strictEqual(readCapabilityCache(broken, key), null);
+});
+
+test('capability cache handles missing files and unwritable paths', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-caps-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  assert.strictEqual(capabilityCacheKey(path.join(root, 'missing.js')), null);
+  assert.strictEqual(readCapabilityCache(path.join(root, 'missing.json'), 'k'), null);
+  assert.strictEqual(
+    writeCapabilityCache(path.join(root, 'x', 'cache.json'), 'k', { supportsNoOpen: true, supportsPort: true }),
+    true
+  );
+});

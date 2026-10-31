@@ -1,19 +1,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const crypto = require('node:crypto');
 const {
-  resolveInstallerFileName,
   semverCompare,
   isNewer,
   decideUpdatePlan,
-  buildProxyedUrls,
-  pickInstallerUrl,
-  pickFirstAvailable,
-  extractInstallerSha256,
-  verifyInstallerIntegrity
+  pickFirstAvailable
 } = require('../lib/updater');
 
 test('semverCompare: strict ordering', () => {
@@ -52,125 +43,8 @@ test('decideUpdatePlan: null remote treated as no update', () => {
   });
 });
 
-test('buildProxyedUrls: official URL is first, followed by proxy fallbacks', () => {
-  const out = buildProxyedUrls('https://raw.githubusercontent.com/foo/bar', [
-    'https://ghfast.top/',
-    'https://mirror.ghproxy.com/'
-  ]);
-  assert.deepStrictEqual(out, [
-    'https://raw.githubusercontent.com/foo/bar',
-    'https://ghfast.top/https://raw.githubusercontent.com/foo/bar',
-    'https://mirror.ghproxy.com/https://raw.githubusercontent.com/foo/bar'
-  ]);
-});
-
-test('buildProxyedUrls: handles prefix without trailing slash', () => {
-  const out = buildProxyedUrls('https://github.com/x/y.exe', [
-    'https://ghfast.top'
-  ]);
-  assert.deepStrictEqual(out, [
-    'https://github.com/x/y.exe',
-    'https://ghfast.top/https://github.com/x/y.exe'
-  ]);
-});
-
-test('buildProxyedUrls: handles relative baseUrl without double slash', () => {
-  const out = buildProxyedUrls('/foo/bar.exe', [
-    'https://ghfast.top/',
-    'https://ghfast.top'
-  ]);
-  assert.deepStrictEqual(out, [
-    '/foo/bar.exe',
-    'https://ghfast.top/foo/bar.exe'
-  ]);
-});
-
-test('buildProxyedUrls: empty proxy list returns original only', () => {
-  const out = buildProxyedUrls('https://example.com/x', []);
-  assert.deepStrictEqual(out, ['https://example.com/x']);
-});
-
-test('buildProxyedUrls: jsdelivr proxy rewrites raw.githubusercontent urls', () => {
-  const out = buildProxyedUrls('https://raw.githubusercontent.com/o/r/main/latest.yml', [
-    'https://fastly.jsdelivr.net/'
-  ]);
-  assert.deepStrictEqual(out, [
-    'https://raw.githubusercontent.com/o/r/main/latest.yml',
-    'https://fastly.jsdelivr.net/gh/o/r@main/latest.yml'
-  ]);
-});
-
-test('buildProxyedUrls: drops proxies that cannot handle non-github hosts', () => {
-  const out = buildProxyedUrls('https://example.com/x', ['https://ghfast.top/']);
-  assert.deepStrictEqual(out, ['https://example.com/x']);
-});
-
-test('pickInstallerUrl: prefers non-portable .exe', () => {
-  const assets = [
-    { name: 'app-portable-1.0.0.exe', browser_download_url: 'https://x/portable.exe' },
-    { name: 'app-setup-1.0.0.exe', browser_download_url: 'https://x/setup.exe' },
-    { name: 'notes.txt', browser_download_url: 'https://x/notes.txt' }
-  ];
-  assert.strictEqual(pickInstallerUrl(assets), 'https://x/setup.exe');
-});
-
 test('pickFirstAvailable: returns first non-null candidate', () => {
   assert.strictEqual(pickFirstAvailable([null, 'a', 'b']), 'a');
   assert.strictEqual(pickFirstAvailable([null, undefined, null]), null);
 });
 
-test('extractInstallerSha256: extracts digest from GitHub asset or release body', () => {
-  const fakeHash = 'a'.repeat(64);
-  const rel1 = {
-    assets: [
-      {
-        name: 'setup.exe',
-        browser_download_url: 'https://x/setup.exe',
-        digest: `sha256:${fakeHash.toUpperCase()}`
-      }
-    ]
-  };
-  assert.strictEqual(extractInstallerSha256(rel1, 'https://x/setup.exe'), fakeHash);
-
-  const rel2 = {
-    assets: [{ name: 'setup.exe', browser_download_url: 'https://x/setup.exe' }],
-    body: `Release notes\n${fakeHash}  setup.exe\n`
-  };
-  assert.strictEqual(extractInstallerSha256(rel2, 'https://x/setup.exe'), fakeHash);
-});
-
-test('verifyInstallerIntegrity: validates matching hash and deletes tampered file on mismatch', () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-updater-sha-'));
-  const filePath = path.join(tmpDir, 'installer.exe');
-  const payload = Buffer.from('trusted-installer-binary-payload', 'utf8');
-  fs.writeFileSync(filePath, payload);
-  const expectedHash = crypto.createHash('sha256').update(payload).digest('hex');
-
-  const okRes = verifyInstallerIntegrity(filePath, expectedHash);
-  assert.strictEqual(okRes.ok, true);
-  assert.strictEqual(okRes.verified, true);
-  assert.strictEqual(fs.existsSync(filePath), true);
-
-  const badRes = verifyInstallerIntegrity(filePath, 'b'.repeat(64));
-  assert.strictEqual(badRes.ok, false);
-  assert.strictEqual(badRes.reason, 'hash-mismatch');
-  assert.strictEqual(fs.existsSync(filePath), false, 'Tampered installer must be unlinked immediately');
-
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-test('resolveInstallerFileName accepts sane exe names and rejects others', () => {
-  assert.strictEqual(
-    resolveInstallerFileName('https://github.com/o/r/releases/download/v1.0.0/DeepSeek%20Harness%20Setup%201.0.0.exe'),
-    'DeepSeek Harness Setup 1.0.0.exe'
-  );
-  assert.strictEqual(resolveInstallerFileName('https://x/setup.exe?token=1'), 'setup.exe');
-  assert.strictEqual(resolveInstallerFileName('https://x/setup.msi'), null);
-  assert.strictEqual(resolveInstallerFileName('https://x/run.bat'), null);
-  assert.strictEqual(resolveInstallerFileName('https://x/'), 'DeepSeek-Harness-Setup.exe');
-  assert.strictEqual(resolveInstallerFileName('not-a-url'), 'DeepSeek-Harness-Setup.exe');
-  assert.strictEqual(
-    resolveInstallerFileName('https://x/we%22ird%3Cname%3E.exe'),
-    'DeepSeek-Harness-Setup.exe'
-  );
-});

@@ -53,9 +53,7 @@ const { createQuitConfirmation } = require('./src/quit-confirmation');
 const { getE2eBackendUrl } = require('./lib/e2e-backend');
 const { createCliInstaller } = require('./lib/cli-install');
 const { createWinUserPath } = require('./lib/win-user-path');
-const { ensureKeybindingFile } = require('./lib/keybindings');
 const { createCspViolationSink, isCspViolationMessage } = require('./lib/csp-report');
-const { createShellUpdater } = require('./lib/shell-updater');
 const { createUpdateJournal, markInterruptedRuntime } = require('./lib/update-journal');
 const { createIpcActions } = require('./src/ipc-actions');
 const { createRestartController } = require('./src/app-restart');
@@ -138,12 +136,9 @@ if (!gotLock) {
 const DSH_HOME = portableLayout.resolveDshHome();
 const LOCAL_RUNTIME_DIR = path.join(DSH_HOME, 'local-runtime');
 const USER_DATA_DIR = app.getPath('userData');
-const KEYBINDINGS_PATH = path.join(USER_DATA_DIR, 'keybindings.json');
-const loadKeybindings = () => ensureKeybindingFile(KEYBINDINGS_PATH);
 const CRASH_REPORT_DIR = path.join(USER_DATA_DIR, 'crash-reports');
 const operationLog = createOperationLog({ dir: path.join(USER_DATA_DIR, 'logs') });
 const BACKEND_CSP_MODE = normalizeCspMode(process.env.DSH_BACKEND_CSP || 'report');
-const shellUpdater = createShellUpdater({ appDir: __dirname });
 const updateJournal = createUpdateJournal({ dir: path.join(DSH_HOME, 'update-journal') });
 const cspViolationSink = createCspViolationSink({
   append: (message) => operationLog.append('csp-violation', { message })
@@ -369,6 +364,7 @@ const backend = createBackend({
   setPort: (port) => {
     currentPort = port;
   },
+  capabilityCachePath: path.join(USER_DATA_DIR, 'dsh-capabilities.json'),
   getEngine: () => currentEngine,
   isSafeMode: () => isSafeMode,
   isQuitting: () => isQuitting,
@@ -430,6 +426,7 @@ const restartController = createRestartController({
   setPort: (port) => {
     currentPort = port;
   },
+  capabilityCachePath: path.join(USER_DATA_DIR, 'dsh-capabilities.json'),
   onReady: (targetUrl, port) => {
     mainWindow.loadURL(targetUrl);
     mainWindow.setTitle(`DeepSeek Harness — ${targetWorkspaceDir}`);
@@ -544,7 +541,6 @@ const uiMenus = createUiMenus({
     safeMode: isSafeMode,
     workspaceDir: targetWorkspaceDir
   }),
-  getKeybindings: () => shortcutController.getBindings(),
   setEngine: (value) => {
     currentEngine = value;
   },
@@ -581,26 +577,6 @@ const uiMenus = createUiMenus({
     getShellVersion,
     getDshHome: () => DSH_HOME,
     getCrashReportDir: () => CRASH_REPORT_DIR,
-    openKeybindingFile: () => shell.openPath(KEYBINDINGS_PATH),
-    getShellUpdateStatus: async () => {
-      try {
-        return await shellUpdater.status();
-      } catch (err) {
-        return { supported: false, reason: 'exception', message: err.message };
-      }
-    },
-    updateShell: async () => {
-      try {
-        return await shellUpdater.update();
-      } catch (err) {
-        return { ok: false, reason: 'exception', message: err.message };
-      }
-    },
-    relaunchApp: () => {
-      app.relaunch();
-      app.exit(0);
-    },
-    reloadKeybindings,
     requestQuit,
     getCliStatus: () => cliInstaller.status(),
     installCli: () => {
@@ -639,18 +615,11 @@ const clipboardBridge = createClipboardBridge({
 
 const shortcutController = createShortcutController({
   globalShortcut,
-  loadBindings: loadKeybindings,
-  toggleWindow: () => toggleMainWindowVisibility(),
-  rebuildMenus: () => buildNativeAppMenu(),
-  operationLog
+  toggleWindow: () => toggleMainWindowVisibility()
 });
 
 function registerRelayShortcut() {
   return shortcutController.register();
-}
-
-function reloadKeybindings() {
-  return shortcutController.reload();
 }
 
 function toggleMainWindowVisibility() {
@@ -756,6 +725,7 @@ const ipcActions = createIpcActions({
   setPort: (port) => {
     currentPort = port;
   },
+  capabilityCachePath: path.join(USER_DATA_DIR, 'dsh-capabilities.json'),
   getEngine: () => currentEngine,
   setEngine: (value) => {
     currentEngine = value;

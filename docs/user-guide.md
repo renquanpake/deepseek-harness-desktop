@@ -1,6 +1,6 @@
 # 用户指南
 
-本指南适用于 `DeepSeek Harness` 0.4.0 桌面外壳。界面菜单默认自动隐藏，按 `Alt` 显示菜单栏。
+本指南适用于 `DeepSeek Harness` 0.5.0 桌面外壳。界面菜单默认自动隐藏，按 `Alt` 显示菜单栏。
 
 ## 1. 安装与首次启动
 
@@ -56,25 +56,6 @@ npm start
 
 - 默认只使用官方源：npmmirror 注册表、npm 官方注册表与 GitHub Releases。
 - 第三方 GitHub 加速镜像默认关闭，需要时显式设置环境变量 `DSH_ALLOW_THIRD_PARTY_MIRROR=1` 后启动。
-- 随包提供 `build/update-public-key.pem` 时，外壳只接受带有效 Ed25519 签名的更新清单；没有公钥时退回 SHA-256 校验。
-
-### 快捷键配置
-
-呼出窗口与 DevTools 的快捷键保存在 Electron 用户数据目录的 `keybindings.json`：
-
-```json
-{
-  "relayShortcut": "Alt+Space",
-  "relayFallback": "CommandOrControl+Alt+D",
-  "toggleDevTools": "F12"
-}
-```
-
-- 「Windows 系统集成」→「打开快捷键配置」会给出文件路径。
-- 修改后点「重新加载快捷键」，立即重新注册，无需重启应用。
-- 非法值会被忽略并回退到默认值，弹窗会列出具体错误。
-- `relayShortcut` 被其他程序占用时自动尝试 `relayFallback`，两者都失败会提示注册失败。
-- 加速键语法与 Electron 一致，例如 `CommandOrControl+Shift+D`、`F12`、`Alt+Space`。
 
 ### dsh 命令行
 
@@ -262,16 +243,9 @@ DSH 内核通过国内镜像安装到 `%USERPROFILE%\.dsh\local-runtime`，安�
 
 ### 外壳更新
 
-两种方式，效果相同，都是 `git pull` + `npm ci`：
+重新运行 `一键部署.bat`，脚本会 `git pull --ff-only`、重装依赖并准备内核。应用内不再提供自更新入口，减少运行时的 git 与 npm 调用。
 
-1. 「引擎与更新」→「更新外壳代码（git pull）」：应用内直接拉取并重装依赖，成功后提示重启。工作区有未提交改动或目录不是 Git 仓库时会拒绝执行；依赖安装失败会自动 `git reset` 回滚到更新前的提交。
-2. 重新运行 `一键部署.bat`，适合已经出问题、应用起不来的情况。
-
-需要提醒：应用内更新只能拿到仓库里已经修好的代码。上游改了启动参数或认证格式时，维护者要先推送适配补丁，用户更新外壳后才能对上。
-
-- 更新过程：`git pull` → `npm ci` → `npm run runtime:prepare` → 重启应用。
-- 用户数据（API Key、工作区、`%USERPROFILE%\.dsh`）不会被清除。
-- 外壳不接受自动降级，`package.json` 版本落后时不会提示更新。
+已配置的 API Key、工作区与用户数据保存在 `%USERPROFILE%\.dsh`，更新不会清除。
 
 ### 回滚
 

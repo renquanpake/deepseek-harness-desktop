@@ -13,7 +13,6 @@ function createUiMenus({
   getMainWindow,
   isWindowsPlatform,
   getState,
-  getKeybindings,
   setEngine,
   setSafeMode,
   actions
@@ -213,76 +212,6 @@ function createUiMenus({
             }
           },
           {
-            label: t('menu.engine.updateShell'),
-            click: async () => {
-              const status = await actions.getShellUpdateStatus();
-              if (!status.supported) {
-                dialog.showMessageBox(getMainWindow(), {
-                  type: 'warning',
-                  title: t('dialog.shellCodeUpdate.title'),
-                  message: t('dialog.shellCodeUpdate.notRepo')
-                });
-                return;
-              }
-              if (status.dirty) {
-                dialog.showMessageBox(getMainWindow(), {
-                  type: 'warning',
-                  title: t('dialog.shellCodeUpdate.title'),
-                  message: t('dialog.shellCodeUpdate.dirty', { branch: status.branch || '-' })
-                });
-                return;
-              }
-              const confirm = await dialog.showMessageBox(getMainWindow(), {
-                type: 'question',
-                title: t('dialog.shellCodeUpdate.title'),
-                message: t('dialog.shellCodeUpdate.confirm'),
-                detail: t('dialog.shellCodeUpdate.detail', { branch: status.branch || '-' }),
-                buttons: [t('dialog.shellCodeUpdate.update'), t('dialog.common.cancel')],
-                defaultId: 0,
-                cancelId: 1
-              });
-              if (confirm.response !== 0) return;
-
-              const result = await actions.updateShell();
-              if (!result.ok) {
-                const reasonKey = result.reason === 'pull-failed'
-                  ? 'pullFailed'
-                  : result.reason === 'install-failed'
-                    ? 'installFailed'
-                    : result.reason === 'worktree-dirty'
-                      ? 'dirty'
-                      : 'failed';
-                const detail = result.rolledBack
-                  ? t('dialog.shellCodeUpdate.rolledBack')
-                  : (result.stderr || result.message || '');
-                dialog.showMessageBox(getMainWindow(), {
-                  type: 'error',
-                  title: t('dialog.shellCodeUpdate.title'),
-                  message: t(`dialog.shellCodeUpdate.${reasonKey}`),
-                  detail: detail || undefined
-                });
-                return;
-              }
-              if (!result.changed) {
-                dialog.showMessageBox(getMainWindow(), {
-                  type: 'info',
-                  title: t('dialog.shellCodeUpdate.title'),
-                  message: t('dialog.shellCodeUpdate.unchanged')
-                });
-                return;
-              }
-              const restart = await dialog.showMessageBox(getMainWindow(), {
-                type: 'info',
-                title: t('dialog.shellCodeUpdate.title'),
-                message: t('dialog.shellCodeUpdate.updated', { head: String(result.newHead || '').slice(0, 8) }),
-                buttons: [t('dialog.shellCodeUpdate.restartNow'), t('dialog.shellCodeUpdate.later')],
-                defaultId: 0,
-                cancelId: 1
-              });
-              if (restart.response === 0) actions.relaunchApp();
-            }
-          },
-          {
             label: t('menu.engine.revertFactory'),
             click: () => {
               actions.revertToFactoryRuntime();
@@ -367,34 +296,12 @@ function createUiMenus({
           ] : []),
           {
             label: t('menu.system.openDevTools'),
-            accelerator: getKeybindings().toggleDevTools,
+            accelerator: 'F12',
             click: () => {
               const activeWindow = getMainWindow();
               if (activeWindow) activeWindow.webContents.toggleDevTools();
             }
           },
-          { type: 'separator' },
-          {
-            label: t('menu.system.openKeybindings'),
-            click: () => {
-              actions.openKeybindingFile();
-            }
-          },
-          {
-            label: t('menu.system.reloadKeybindings'),
-            click: async () => {
-              const result = await actions.reloadKeybindings();
-              const invalid = result.errors && result.errors.length > 0;
-              dialog.showMessageBox(getMainWindow(), {
-                type: invalid ? 'warning' : 'info',
-                title: t('dialog.keybindings.title'),
-                message: invalid
-                  ? t('dialog.keybindings.invalid')
-                  : t('dialog.keybindings.reloaded', { shortcut: result.registered || t('dialog.keybindings.unavailable') }),
-                detail: invalid ? result.errors.join('\n') : undefined
-              });
-            }
-          }
         ]
       }
     ];

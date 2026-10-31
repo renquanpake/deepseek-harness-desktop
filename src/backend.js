@@ -8,6 +8,9 @@ const {
   buildLaunchArgs,
   parseAuthenticatedUrl,
   probeWebCapabilities,
+  capabilityCacheKey,
+  readCapabilityCache,
+  writeCapabilityCache,
   adoptCapturedPort
 } = require('../lib/dsh-adapter');
 const { runTaskkill } = require('../lib/secure-exec');
@@ -28,6 +31,7 @@ function createBackend(deps) {
     getLocalRuntimeDir,
     getPort,
     setPort,
+    capabilityCachePath,
     getEngine,
     isSafeMode,
     isQuitting,
@@ -204,8 +208,15 @@ function createBackend(deps) {
 
   function probeCapabilities(entry) {
     if (capabilityCache.has(entry)) return capabilityCache.get(entry);
+    const key = capabilityCacheKey(entry, fs);
+    const cached = key ? readCapabilityCache(capabilityCachePath, key, fs) : null;
+    if (cached) {
+      capabilityCache.set(entry, cached);
+      return cached;
+    }
     const capabilities = probeWebCapabilities({ entry });
     capabilityCache.set(entry, capabilities);
+    if (key && capabilities) writeCapabilityCache(capabilityCachePath, key, capabilities, fs);
     return capabilities;
   }
 

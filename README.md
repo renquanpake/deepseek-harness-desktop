@@ -33,7 +33,19 @@
 
 ---
 
-## 🌟 核心特色功能
+## ⚡ 轻量化基线
+
+- 生产依赖为 0，外壳只依赖 Electron 与 Node 标准库
+- 工作区、插件、设置、会话等界面能力全部交给 DSH 自带，外壳不重复实现
+- 启动时的内核能力探测结果落盘缓存，只有内核版本变化才重新探测
+- 度量命令：
+
+```bash
+npm run footprint        # 外壳源码与测试规模、内置运行时体积
+npm run footprint -- --full   # 额外统计 node_modules
+```
+
+
 
 * **🖥️ 单窗口一体化沉浸桌面 (Single-Window Seamless Immersion)**：
   * **杜绝浏览器外跳**：后台启动注入 `--no-open` 参数，彻底杜绝 DSH 自动拉起外置 Edge/Chrome 浏览器的割裂体验。
@@ -62,7 +74,6 @@
 | `Alt + Shift + V` | 将剪贴板中的最新截图或文本直接灌入输入框 |
 | `F12` | 打开开发者调试工具 (DevTools) |
 
-呼出快捷键与 DevTools 快捷键可在用户数据目录的 `keybindings.json` 中修改，改完后从「Windows 系统集成」→「重新加载快捷键」生效。
 
 ---
 
