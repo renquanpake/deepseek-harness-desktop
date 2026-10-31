@@ -1,6 +1,6 @@
 # 发布与更新
 
-本文说明 `DeepSeek Harness` 桌面外壳的版本模型、部署方式与更新流程。当前版本为 `0.5.0`。
+本文说明 `DeepSeek Harness` 桌面外壳的版本模型、部署方式与更新流程。当前版本为 `0.6.0`。
 
 ## 1. 版本模型
 
@@ -13,8 +13,8 @@
 
 ### 外壳版本
 
-- 当前为 `0.5.0`，定义在 `package.json`。
-- Git tag 使用 `v` 前缀，例如 `v0.5.0`。
+- 当前为 `0.6.0`，定义在 `package.json`。
+- Git tag 使用 `v` 前缀，例如 `v0.6.0`。
 - 仓库不再构建安装包，外壳更新以重新部署为准。
 
 ### 内置内核版本
@@ -44,8 +44,11 @@ git clone https://github.com/renquanpake/deepseek-harness-desktop.git
 cd deepseek-harness-desktop
 npm ci --no-audit --no-fund
 npm run runtime:prepare
+npm run runtime:prune
 npm start
 ```
+
+`runtime:prune` 会删除内核依赖树中的源码、类型声明、文档与测试目录，实测把 863 MB 压到 561 MB，契约检查仍 4/4 通过；部署脚本会自动执行这一步。
 
 或直接双击 `一键部署.bat`，脚本会完成上述步骤。
 

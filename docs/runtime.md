@@ -242,6 +242,7 @@ python -m pip install --only-binary=:all: numpy==2.1.3
 
 ### 触发方式
 
+- 部署时在 `runtime:prepare` 之后执行 `npm run runtime:prune`，删除非运行时文件（约省 300 MB），再跑兼容与契约检查。
 - `npm run runtime:prepare` 是准备运行时的主步骤，部署时由 `一键部署.bat` 或手动执行。`prepare-runtime.js` 在完成 Node / pnpm 运行时与出厂插件准备后，最后一步以可选增强方式调用：
 
 ```bash
