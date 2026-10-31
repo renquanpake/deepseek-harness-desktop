@@ -1,6 +1,6 @@
 # 发布与更新
 
-本文说明 `DeepSeek Harness` 桌面外壳的版本模型、部署方式与更新流程。当前版本为 `0.3.8`。
+本文说明 `DeepSeek Harness` 桌面外壳的版本模型、部署方式与更新流程。当前版本为 `0.3.9`。
 
 ## 1. 版本模型
 
@@ -13,8 +13,8 @@
 
 ### 外壳版本
 
-- 当前为 `0.3.8`，定义在 `package.json`。
-- Git tag 使用 `v` 前缀，例如 `v0.3.8`。
+- 当前为 `0.3.9`，定义在 `package.json`。
+- Git tag 使用 `v` 前缀，例如 `v0.3.9`。
 - 仓库不再构建安装包，外壳更新以重新部署为准。
 
 ### 内置内核版本
@@ -129,6 +129,21 @@ npm run check:upstream -- --runtime-dir .\dsh-runtime
 外壳在启动时还会探测 `dsh web --help`：如果新版本移除了 `--no-open` 或 `--port`，会按实际支持的参数组装命令；端口不匹配时自动采用上游打印的端口，而不是加载失败。
 
 认证 URL 由上游在插件加载完成后才打印，外壳启动时最多等待 10 秒；超时会加载裸地址并输出警告，出现 401 时应优先运行上面的契约检查。
+
+## 5.2 与官方更新栈的差距
+
+| 能力 | 官方桌面端 | 本项目 | 状态 |
+| --- | --- | --- | --- |
+| 传输 | electron-updater generic feed，库内处理分块与续传 | pnpm 装内核、git pull 外壳 | 机制不同，均可用 |
+| 信任 | 安装包签名 + publisher 校验 + 公证 | 启动契约验证 + last-good 回退 | 源码部署无安装包签名 |
+| 通道 | nightly / latest | 仅 latest（npm dist-tag） | 缺 |
+| 状态机 | idle/checking/downloading/verifying/ready/installing/error 跨重启 | 检查/安装/验证/切换/回退，本轮起落盘可跨重启 | 基本对齐 |
+| 审计 | 每进程 JSONL，白名单字段并 flush | 本轮新增 JSONL journal，白名单字段并 flush | 已对齐 |
+| 中断恢复 | 更新窗口与调度器配合 | 启动检测未完成更新并回车厂内核 | 已对齐 |
+| 更新 UI | 专用更新窗口与覆盖层 | 窗口标题百分比 + 弹窗 | 缺 |
+| 灰度与强制更新 | 通道 + 强制更新策略 | 版本范围 + 手动检查 | 缺 |
+
+本轮补齐的是状态机与审计：`DSH_HOME/update-journal/update-journal.jsonl` 记录 `check-start`、`install-start`、`verify-ok`、`promote`、`restore`、`factory-fallback` 等事件；启动时若最后一条停在 `install-start` 或 `verify-ok`，判定为中断更新，自动标记本机内核不可用并回车厂内核，同时写操作日志并提示。
 
 ## 6. 回滚
 

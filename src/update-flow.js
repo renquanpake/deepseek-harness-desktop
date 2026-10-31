@@ -23,6 +23,7 @@ function createUpdateFlow({
   getBundledPnpmCjs,
   preset,
   hooks,
+  journal = { record: () => {} },
   verifyRuntime = async (runtimeDir) => runContractCheck({
     runtimeDir,
     timeoutMs: 120_000,
@@ -121,6 +122,7 @@ function createUpdateFlow({
       );
     }
     console.log('[hot-update] 开始更新 DSH 内核至 ' + targetVersion);
+    journal.record('install-start', { version: targetVersion || 'latest' });
     hooks.killProcessTree();
     const nodeExe = getBundledNodeExe();
     const pnpmCjs = getBundledPnpmCjs();
@@ -147,22 +149,26 @@ function createUpdateFlow({
     const verdict = await verifyRuntime(localRuntimeDir);
     if (!verdict || !verdict.ok) {
       const reason = describeVerdict(verdict);
+      journal.record('verify-failed', { version: targetVersion || 'unknown', reason });
       const lastGood = readLastGood();
       quarantineLocalRuntime(reason);
       if (lastGood && lastGood.version && lastGood.version !== targetVersion) {
         const restored = await restoreLastGood(nodeExe, pnpmCjs, lastGood);
         if (restored) {
+          journal.record('restore', { version: lastGood.version });
           throw new Error(t('error.hotUpdateRolledBackToLastGood', {
             version: lastGood.version,
             reason
           }));
         }
       }
+      journal.record('factory-fallback', { reason });
       hooks.setForceBundledRuntime(true);
       hooks.resetLocalRuntimeBrokenUntil();
       await hooks.restartWithCurrentConfig();
       throw new Error(t('error.hotUpdateIncompatible', { reason }));
     }
+    journal.record('verify-ok', { version: targetVersion || readDshVersion(localRuntimeDir) || 'unknown' });
     writeLastGood(targetVersion || readDshVersion(localRuntimeDir));
 
     const markerFile = path.join(localRuntimeDir, '.broken-marker.json');
@@ -192,6 +198,7 @@ function createUpdateFlow({
         }
       }
     }
+    journal.record('promote', { version: targetVersion || readDshVersion(localRuntimeDir) || 'unknown' });
     hooks.startDshBackend();
   }
 
@@ -349,6 +356,7 @@ function createUpdateFlow({
   async function runUpdateCheck(silent = false) {
     if (inFlight) return;
     inFlight = true;
+    journal.record('check-start');
     try {
       const currentCore = getCurrentDshVersion();
       const currentShell = getShellVersion();
@@ -386,6 +394,7 @@ function createUpdateFlow({
       }
     } finally {
       inFlight = false;
+      journal.record('check-done');
     }
   }
 

@@ -189,6 +189,10 @@
       "installFailed": "依赖安装失败。",
       "rolledBack": "已回滚到更新前的提交并恢复依赖。",
       "failed": "更新失败。"
+    },
+    "updateInterrupted": {
+      "title": "更新未完成",
+      "message": "检测到上次内核更新未完成，本次启动已回退出厂内核。请重新执行「检查更新」，或运行一键部署脚本。"
     }
   },
   "notify": {

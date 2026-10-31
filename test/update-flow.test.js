@@ -9,6 +9,7 @@ const path = require('node:path');
 const updaterPath = require.resolve('../lib/updater');
 const updateCheckPath = require.resolve('../lib/update-check');
 const updateFlowPath = require.resolve('../src/update-flow');
+const { createUpdateJournal } = require('../lib/update-journal');
 
 function loadUpdateFlow({ updater = {}, updateCheck = {} } = {}) {
   require(updaterPath);
@@ -116,6 +117,7 @@ function makeHarness(t, options = {}) {
     getBundledPnpmCjs: () => '/usr/bin/pnpm.cjs',
     preset,
     hooks,
+    journal: options.journal || createUpdateJournal({ dir: path.join(root, 'update-journal'), log: { warn: () => {} } }),
     verifyRuntime: options.verifyRuntime || (async () => ({ ok: true, steps: [] }))
   });
 
@@ -385,6 +387,62 @@ test('a failed verification restores the last good core instead of the factory o
   assert.strictEqual(fs.existsSync(harness.localRuntimeDir), true, 'restored runtime stays in place');
   assert.strictEqual(harness.errors.length, 1);
   assert.match(harness.errors[0].message, /hotUpdateRolledBackToLastGood/);
+});
+
+test('a successful core update records its phases in the journal', async (t) => {
+  const harness = makeHarness(t, {
+    messageBoxResponse: { response: 0 },
+    modules: {
+      updateCheck: {
+        checkCoreVersion: async () => '0.2.1',
+        checkShellVersion: async () => '0.2.1',
+        checkReleaseAssets: async () => null
+      }
+    }
+  });
+
+  await harness.flow.runUpdateCheck(true);
+
+  const journalFile = path.join(harness.root, 'update-journal', 'update-journal.jsonl');
+  const events = fs.readFileSync(journalFile, 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line).event);
+  assert.deepStrictEqual(events, [
+    'check-start',
+    'install-start',
+    'verify-ok',
+    'promote',
+    'check-done'
+  ]);
+});
+
+test('a rejected core records verification and fallback phases', async (t) => {
+  const harness = makeHarness(t, {
+    messageBoxResponse: { response: 0 },
+    verifyRuntime: async () => ({
+      ok: false,
+      steps: [{ name: 'authenticated index serves the web shell', ok: false, detail: '401' }]
+    }),
+    modules: {
+      updateCheck: {
+        checkCoreVersion: async () => '0.2.1',
+        checkShellVersion: async () => '0.2.1',
+        checkReleaseAssets: async () => null
+      }
+    }
+  });
+
+  await harness.flow.runUpdateCheck(true);
+
+  const journalFile = path.join(harness.root, 'update-journal', 'update-journal.jsonl');
+  const events = fs.readFileSync(journalFile, 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line).event);
+  assert.deepStrictEqual(events, [
+    'check-start',
+    'install-start',
+    'verify-failed',
+    'factory-fallback',
+    'check-done'
+  ]);
 });
 
 test('concurrent update checks collapse into a single run', async (t) => {

@@ -189,6 +189,10 @@
       "installFailed": "Dependency installation failed.",
       "rolledBack": "Rolled back to the previous commit and restored dependencies.",
       "failed": "Update failed."
+    },
+    "updateInterrupted": {
+      "title": "Update did not finish",
+      "message": "The previous core update did not finish. The factory runtime is active for this launch; run Check for Updates again or re-run the deployment script."
     }
   },
   "notify": {

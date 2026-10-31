@@ -57,6 +57,7 @@ const { ensureKeybindingFile } = require('./lib/keybindings');
 const { createCspViolationSink, isCspViolationMessage } = require('./lib/csp-report');
 const { createWorkspaceStore } = require('./lib/workspace-store');
 const { createShellUpdater } = require('./lib/shell-updater');
+const { createUpdateJournal, markInterruptedRuntime } = require('./lib/update-journal');
 const { createIpcActions } = require('./src/ipc-actions');
 const { createRestartController } = require('./src/app-restart');
 const { createShortcutController } = require('./src/shortcuts');
@@ -144,6 +145,7 @@ const CRASH_REPORT_DIR = path.join(USER_DATA_DIR, 'crash-reports');
 const operationLog = createOperationLog({ dir: path.join(USER_DATA_DIR, 'logs') });
 const BACKEND_CSP_MODE = normalizeCspMode(process.env.DSH_BACKEND_CSP || 'report');
 const shellUpdater = createShellUpdater({ appDir: __dirname });
+const updateJournal = createUpdateJournal({ dir: path.join(DSH_HOME, 'update-journal') });
 const workspaceStore = createWorkspaceStore({
   filePath: path.join(USER_DATA_DIR, 'recent-workspaces.json')
 });
@@ -544,6 +546,7 @@ const updateFlow = createUpdateFlow({
   getBundledNodeExe,
   getBundledPnpmCjs,
   preset: presetPlugins,
+  journal: updateJournal,
   hooks: {
     killProcessTree,
     startDshBackend,
@@ -858,6 +861,17 @@ app.on('web-contents-created', (_event, contents) => {
 app.whenReady().then(async () => {
   if (!gotLock) return;
   handleCliWorkspaceArgs(process.argv);
+  if (updateJournal.isInterrupted()) {
+    const marked = markInterruptedRuntime({ runtimeDir: LOCAL_RUNTIME_DIR });
+    operationLog.append('update-interrupted', { marked });
+    if (marked) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        title: t('dialog.updateInterrupted.title'),
+        message: t('dialog.updateInterrupted.message')
+      });
+    }
+  }
   workspaceStore.touch(
     targetWorkspaceIsWorktree ? activeWorktreeSession.repoPath || targetWorkspaceDir : targetWorkspaceDir
   );
