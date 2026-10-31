@@ -24,16 +24,16 @@ test('keeps the three locales and removes the rest', (t) => {
   const result = pruneElectron({ distDir: root, log: { warn: () => {} } });
 
   assert.strictEqual(result.ok, true);
-  assert.strictEqual(result.removed, 3);
-  assert.strictEqual(result.freedBytes, 3 * 1024);
+  assert.strictEqual(result.removed, 5);
+  assert.strictEqual(result.freedBytes, 5 * 1024);
   const remaining = fs.readdirSync(path.join(root, 'locales')).sort();
-  assert.deepStrictEqual(remaining, ['en-US.pak', 'zh-CN.pak', 'zh-TW.pak']);
+  assert.deepStrictEqual(remaining, ['zh-CN.pak']);
 });
 
 test('dry run reports without deleting', (t) => {
   const root = makeDist(t);
   const result = pruneElectron({ distDir: root, dryRun: true, log: { warn: () => {} } });
-  assert.strictEqual(result.removed, 3);
+  assert.strictEqual(result.removed, 5);
   assert.strictEqual(fs.readdirSync(path.join(root, 'locales')).length, 6);
 });
 
@@ -53,4 +53,5 @@ test('parseArgs defaults to node_modules/electron/dist', () => {
   assert.strictEqual(custom.distDir, path.resolve('/tmp/e'));
   assert.strictEqual(custom.dryRun, true);
   assert.ok(KEEP_LOCALES.has('zh-CN.pak'));
+  assert.strictEqual(KEEP_LOCALES.size, 1);
 });

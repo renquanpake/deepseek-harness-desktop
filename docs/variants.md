@@ -56,20 +56,18 @@
 
 裁剪只删除源码、类型声明、文档与测试目录，运行时依赖与原生二进制全部保留，DSH 功能不受影响。
 
-轻量版必须是桌面窗口，浏览器应用窗口模式不作为选项。Electron 是当前可验证的基线：
+轻量版必须是桌面窗口，浏览器应用窗口模式不作为选项。两种可用的桌面形态：
 
-| 项 | 体积 |
-| --- | ---: |
-| Electron 37 Windows 解包 | 318 MB |
-| 裁掉 52 个多余语言包后 | **277 MB** |
-| 内核依赖树（已裁剪） | 561 MB |
-| 9 个预置插件 | 约 30 MB |
-| 外壳代码 | <1 MB |
-| **合计** | **约 870 MB** |
+| 形态 | 外壳 | 内核 | 插件 | 合计 |
+| --- | ---: | ---: | ---: | ---: |
+| Electron 外壳 | 276 MB（只留 zh-CN 语言包） | 约 540–560 MB | 约 30 MB | **约 850 MB** |
+| WebView2 外壳 | 70–90 MB 自包含 exe | 约 540–560 MB | 约 30 MB | **约 650 MB** |
 
-Electron 语言包只保留 `en-US`、`zh-CN`、`zh-TW`，其余 52 个删除，实测省 41 MB；部署脚本自动执行 `npm run electron:prune`。
+Electron 37.10.3 Windows 解包 318 MB，其中 locales 43 MB；只保留 `zh-CN.pak` 后约 276 MB，省 42 MB。
 
-更小的桌面形态需要 WebView2 原生壳（约 5 MB 外壳 + 系统 WebView2），合计约 570 MB，但要在 Windows 上用 .NET 或 C++ 构建并验证，本环境无法验证，列为后续选项。
+内核在 Windows 目标上额外按平台裁剪：删除 `linux-*`、`darwin-*`、`win32-arm64` 等异平台目录、`docs/examples/benchmarks/coverage` 与 `.d.mts`/`.d.cts` 声明文件。Windows 侧的实际节省需要实机确认，部署脚本会在裁剪后立即跑契约检查，失败即中止。
+
+WebView2 形态见 `webview2/`：WinForms + WebView2，约 350 行 C#，拉起内核、解析认证 URL、关闭即结束进程。CI 工作流 `WebView2 Lite` 在 `windows-latest` 上发布自包含 exe。
 
 ### 部署时自动裁剪
 

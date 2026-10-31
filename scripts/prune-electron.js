@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const KEEP_LOCALES = new Set(['en-US.pak', 'zh-CN.pak', 'zh-TW.pak']);
+const KEEP_LOCALES = new Set(['zh-CN.pak']);
 
 function pruneElectron({ distDir, dryRun = false, fsImpl = fs, log = console } = {}) {
   if (!distDir) throw new TypeError('distDir is required');

@@ -83,3 +83,44 @@ test('parseArgs defaults to dsh-runtime', () => {
   assert.strictEqual(custom.runtimeDir, path.resolve('/tmp/rt'));
   assert.strictEqual(custom.dryRun, true);
 });
+
+test('removes doc/example dirs and declaration variants', (t) => {
+  const root = makeRuntime(t);
+  fs.mkdirSync(path.join(root, 'node_modules/some-pkg/docs'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'node_modules/some-pkg/docs/guide.js'), 'x');
+  fs.mkdirSync(path.join(root, 'node_modules/some-pkg/examples'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'node_modules/some-pkg/types.d.mts'), 'x');
+  fs.writeFileSync(path.join(root, 'node_modules/some-pkg/types.d.cts'), 'x');
+
+  pruneRuntime({ runtimeDir: root, log: { warn: () => {} } });
+
+  const exists = (rel) => fs.existsSync(path.join(root, rel));
+  assert.strictEqual(exists('node_modules/some-pkg/docs'), false);
+  assert.strictEqual(exists('node_modules/some-pkg/examples'), false);
+  assert.strictEqual(exists('node_modules/some-pkg/types.d.mts'), false);
+  assert.strictEqual(exists('node_modules/some-pkg/types.d.cts'), false);
+});
+
+test('prunes binary dirs for other platforms when a target is given', (t) => {
+  const root = makeRuntime(t);
+  const dirs = [
+    'node_modules/some-pkg/sharp-linux-x64',
+    'node_modules/some-pkg/sharp-win32-x64',
+    'node_modules/some-pkg/sharp-win32-arm64',
+    'node_modules/some-pkg/prebuilds/win32-x64',
+    'node_modules/some-pkg/prebuilds/win32-arm64'
+  ];
+  for (const dir of dirs) {
+    fs.mkdirSync(path.join(root, dir), { recursive: true });
+    fs.writeFileSync(path.join(root, dir, 'x.node'), 'x');
+  }
+
+  pruneRuntime({ runtimeDir: root, platform: 'win32', arch: 'x64', log: { warn: () => {} } });
+
+  const exists = (rel) => fs.existsSync(path.join(root, rel));
+  assert.strictEqual(exists('node_modules/some-pkg/sharp-linux-x64'), false);
+  assert.strictEqual(exists('node_modules/some-pkg/sharp-win32-arm64'), false);
+  assert.strictEqual(exists('node_modules/some-pkg/prebuilds/win32-arm64'), false);
+  assert.strictEqual(exists('node_modules/some-pkg/sharp-win32-x64'), true);
+  assert.strictEqual(exists('node_modules/some-pkg/prebuilds/win32-x64'), true);
+});

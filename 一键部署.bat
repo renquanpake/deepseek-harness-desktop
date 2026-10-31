@@ -69,7 +69,7 @@ if exist "dsh-runtime\node_modules\@deepseek-ai\dsh" (
     if errorlevel 1 goto :runtime_failed
 )
 echo       裁剪非运行时文件（源码、类型声明、文档、测试）...
-node scripts/prune-runtime.js
+node scripts/prune-runtime.js --platform win32 --arch x64
 if errorlevel 1 goto :prune_failed
 echo       校验内核与外壳的兼容性...
 node scripts/check-runtime-compat.js

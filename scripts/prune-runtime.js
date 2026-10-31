@@ -3,9 +3,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const FILE_PATTERNS = [/\.map$/i, /\.md$/i, /\.d\.ts$/i, /\.ts$/i];
+const FILE_PATTERNS = [/\.map$/i, /\.md$/i, /\.d\.ts$/i, /\.d\.mts$/i, /\.d\.cts$/i, /\.ts$/i];
 const KEEP_BASENAME = /^(LICEN[CS]E|COPYING|NOTICE|AUTHORS|PATENTS)/i;
-const TEST_DIRS = new Set(['test', 'tests', '__tests__', '__mocks__', 'spec']);
+const JUNK_DIRS = new Set([
+  'test', 'tests', '__tests__', '__mocks__', 'spec',
+  'docs', 'doc', 'examples', 'example', 'benchmarks', 'benchmark',
+  'coverage', '.github', '.vscode', '.idea'
+]);
+const PLATFORM_DIR = /^(?:.*-)?(linux|darwin|win32|android|freebsd|openbsd|sunos|aix)-(x64|arm64|arm|ia32|riscv64|s390x|ppc64)$/i;
+const PREBUILD_DIR = /^(linux|darwin|win32|android)-(x64|arm64|arm|ia32)$/i;
 const REQUIRED = path.join('node_modules', '@deepseek-ai', 'dsh');
 
 function shouldKeepFile(name) {
@@ -17,11 +23,18 @@ function shouldRemoveFile(name) {
   return FILE_PATTERNS.some((pattern) => pattern.test(name));
 }
 
-function collectTargets(nodeModulesDir) {
+function isForeignPlatformDir(name, platform, arch, parentName) {
+  if (!platform || !arch) return false;
+  const match = PLATFORM_DIR.exec(name) || (parentName === 'prebuilds' ? PREBUILD_DIR.exec(name) : null);
+  if (!match) return false;
+  return match[1].toLowerCase() !== platform.toLowerCase() || match[2].toLowerCase() !== arch.toLowerCase();
+}
+
+function collectTargets(nodeModulesDir, { platform, arch } = {}) {
   const files = [];
   const dirs = [];
 
-  function walk(dir) {
+  function walk(dir, parentName) {
     let entries;
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -32,18 +45,22 @@ function collectTargets(nodeModulesDir) {
       const full = path.join(dir, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
-        if (TEST_DIRS.has(entry.name.toLowerCase()) && dir !== nodeModulesDir) {
+        if (JUNK_DIRS.has(entry.name.toLowerCase()) && dir !== nodeModulesDir) {
           dirs.push(full);
           continue;
         }
-        walk(full);
+        if (isForeignPlatformDir(entry.name, platform, arch, parentName)) {
+          dirs.push(full);
+          continue;
+        }
+        walk(full, entry.name);
       } else if (entry.isFile() && shouldRemoveFile(entry.name)) {
         files.push(full);
       }
     }
   }
 
-  walk(nodeModulesDir);
+  walk(nodeModulesDir, '');
   return { files, dirs };
 }
 
@@ -61,7 +78,7 @@ function sizeOf(target) {
   return total;
 }
 
-function pruneRuntime({ runtimeDir, dryRun = false, fsImpl = fs, log = console } = {}) {
+function pruneRuntime({ runtimeDir, dryRun = false, platform, arch, fsImpl = fs, log = console } = {}) {
   if (!runtimeDir) throw new TypeError('runtimeDir is required');
   const resolved = path.resolve(runtimeDir);
   const nodeModulesDir = path.join(resolved, 'node_modules');
@@ -71,7 +88,7 @@ function pruneRuntime({ runtimeDir, dryRun = false, fsImpl = fs, log = console }
     return { ok: false, reason: 'runtime-not-prepared', runtimeDir: resolved };
   }
 
-  const { files, dirs } = collectTargets(nodeModulesDir);
+  const { files, dirs } = collectTargets(nodeModulesDir, { platform, arch });
   let bytes = 0;
   for (const target of [...files, ...dirs]) bytes += sizeOf(target);
 
@@ -105,11 +122,15 @@ function pruneRuntime({ runtimeDir, dryRun = false, fsImpl = fs, log = console }
 function parseArgs(argv) {
   const options = {
     runtimeDir: path.join(process.cwd(), 'dsh-runtime'),
-    dryRun: false
+    dryRun: false,
+    platform: null,
+    arch: null
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--runtime-dir') options.runtimeDir = path.resolve(argv[++index] || '');
+    else if (arg === '--platform') options.platform = argv[++index] || null;
+    else if (arg === '--arch') options.arch = argv[++index] || null;
     else if (arg === '--dry-run') options.dryRun = true;
   }
   return options;
@@ -135,4 +156,4 @@ if (require.main === module) {
   process.exitCode = main();
 }
 
-module.exports = { pruneRuntime, parseArgs, collectTargets, shouldRemoveFile, shouldKeepFile, TEST_DIRS };
+module.exports = { pruneRuntime, parseArgs, collectTargets, shouldRemoveFile, shouldKeepFile, JUNK_DIRS };

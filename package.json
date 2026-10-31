@@ -1,7 +1,7 @@
 {
   "name": "deepseek-harness-desktop",
   "productName": "DeepSeek Harness",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "DeepSeek Harness 桌面端外壳 - 原生 Windows 一体化装甲",
   "author": "renquanpake",
   "main": "main.js",

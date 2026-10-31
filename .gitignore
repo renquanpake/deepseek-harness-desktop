@@ -39,3 +39,8 @@ dsh-official/
 # Update manifest signing keys (never commit the private key)
 update-signing-key.pem
 *.private.pem
+
+# WebView2 build output
+webview2/out/
+webview2/bin/
+webview2/obj/

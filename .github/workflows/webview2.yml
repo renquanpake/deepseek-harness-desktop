@@ -1,0 +1,38 @@
+name: WebView2 Lite
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'webview2/**'
+      - '.github/workflows/webview2.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish self-contained executable
+        run: >
+          dotnet publish webview2/DeepSeekHarnessLite.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o webview2/out
+
+      - name: Report size
+        shell: pwsh
+        run: Get-ChildItem webview2/out | Select-Object Name, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeepSeekHarnessLite-webview2
+          path: webview2/out/*
