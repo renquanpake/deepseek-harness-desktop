@@ -1,6 +1,6 @@
 # 发布与更新
 
-本文说明 `DeepSeek Harness` 桌面外壳的版本模型、部署方式与更新流程。当前版本为 `0.6.0`。
+本文说明 `DeepSeek Harness` 桌面外壳的版本模型、部署方式与更新流程。当前版本为 `0.6.1`。
 
 ## 1. 版本模型
 
@@ -13,8 +13,8 @@
 
 ### 外壳版本
 
-- 当前为 `0.6.0`，定义在 `package.json`。
-- Git tag 使用 `v` 前缀，例如 `v0.6.0`。
+- 当前为 `0.6.1`，定义在 `package.json`。
+- Git tag 使用 `v` 前缀，例如 `v0.6.1`。
 - 仓库不再构建安装包，外壳更新以重新部署为准。
 
 ### 内置内核版本
@@ -43,6 +43,7 @@
 git clone https://github.com/renquanpake/deepseek-harness-desktop.git
 cd deepseek-harness-desktop
 npm ci --no-audit --no-fund
+npm run electron:prune
 npm run runtime:prepare
 npm run runtime:prune
 npm start

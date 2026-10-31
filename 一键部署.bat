@@ -57,6 +57,9 @@ if exist "package-lock.json" (
 )
 if errorlevel 1 goto :install_failed
 
+echo       裁剪 Electron 多余语言包...
+node scripts/prune-electron.js
+
 echo.
 echo [3/4] 准备内置内核与预置插件（需要联网，数分钟）...
 if exist "dsh-runtime\node_modules\@deepseek-ai\dsh" (
