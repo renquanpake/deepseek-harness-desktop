@@ -250,11 +250,6 @@ test('main boots the e2e workspace, loads the backend and wires security', async
   assert.ok(state.shortcuts.includes('Alt+Space'));
   assert.ok(state.ipcHandles.includes('dsh:get-runtime-info'));
 
-  const recentFile = path.join(userDataDir, 'recent-workspaces.json');
-  assert.strictEqual(fs.existsSync(recentFile), true, 'recent workspaces file must be written');
-  const recents = JSON.parse(fs.readFileSync(recentFile, 'utf8'));
-  assert.ok(recents.workspaces.length >= 1);
-
   assert.strictEqual(fs.existsSync(path.join(userDataDir, 'keybindings.json')), true);
   const operations = fs.readFileSync(path.join(userDataDir, 'logs', 'operations.jsonl'), 'utf8');
   assert.match(operations, /"type":"e2e-backend"/);
@@ -266,9 +261,9 @@ test('main boots the e2e workspace, loads the backend and wires security', async
   void cspResult;
 });
 
-test('second instance switches workspace and records it', async (t) => {
+test('second instance switches the workspace shown in the title', async (t) => {
   const harness = bootMain(t);
-  const { state, appEvents, root } = harness;
+  const { state, appEvents } = harness;
   await waitFor(() => state.loadURLs.includes(BACKEND_URL));
 
   const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-other-'));
@@ -278,12 +273,9 @@ test('second instance switches workspace and records it', async (t) => {
   assert.strictEqual(typeof secondInstance, 'function');
   await secondInstance({}, ['node', 'main.js', '--open-dir', otherDir]);
 
-  const recents = JSON.parse(
-    fs.readFileSync(path.join(root, 'userdata', 'recent-workspaces.json'), 'utf8')
-  );
   assert.ok(
-    recents.workspaces.some((entry) => path.resolve(entry.path) === path.resolve(otherDir)),
-    'the switched workspace must be recorded'
+    state.titles.some((title) => title.includes(path.basename(otherDir))),
+    'the switched workspace must be reflected in the window title'
   );
 });
 

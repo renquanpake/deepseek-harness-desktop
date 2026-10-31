@@ -9,12 +9,7 @@
       "newWorktree": "新建独立工作区分支 (Git Worktree)...",
       "pasteClipboard": "粘贴剪贴板截图/文本至输入框 (Alt+Shift+V)",
       "alwaysOnTop": "窗口始终置顶 (悬浮伴侣模式)",
-      "autoStart": "开机自动启动 (Windows 登录自启)",
-      "openWorkspace": "打开工作区…",
-      "recentWorkspaces": "最近工作区",
-      "recentEmpty": "（暂无最近工作区）",
-      "recentCurrent": "（当前）",
-      "removeRecent": "从最近列表移除当前工作区"
+      "autoStart": "开机自动启动 (Windows 登录自启)"
     },
     "engine": {
       "title": "引擎与更新 (Engine & Updates)",
@@ -27,7 +22,6 @@
       "winNative": "运行引擎：Windows 原生模式 (推荐，速度最快)",
       "wsl2": "运行引擎：WSL2 兼容模式 (适用于 Linux 依赖工具)",
       "safeMode": "故障排查安全模式 (临时禁用第三方插件)",
-      "restorePresets": "恢复出厂预置插件 (重置界面增强组件)",
       "updateShell": "更新外壳代码（git pull）"
     },
     "system": {
@@ -120,10 +114,6 @@
     "wsl2Unavailable": {
       "message": "WSL2 引擎仅在 Windows 主机上可用。"
     },
-    "presetReset": {
-      "title": "预置插件重置",
-      "message": "已成功强制恢复出厂预置插件配置并重启工作台！"
-    },
     "contextMenu": {
       "title": "右键菜单集成",
       "registerUnavailable": "右键菜单注册仅在 Windows 主机上可用。",
@@ -169,10 +159,6 @@
       "reloaded": "已重新加载快捷键，当前呼出快捷键：{shortcut}",
       "invalid": "快捷键配置无效，已回退到默认值。",
       "unavailable": "（注册失败，可能被其他程序占用）"
-    },
-    "workspace": {
-      "title": "打开工作区",
-      "openFailed": "打开工作区失败：{message}"
     },
     "shellCodeUpdate": {
       "title": "更新外壳代码",

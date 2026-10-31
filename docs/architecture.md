@@ -26,7 +26,6 @@
 | `src/portable-paths.js` | 便携数据根探测、子目录与 `.gitconfig` 准备、DSH_HOME 与环境叠加 |
 | `src/security.js` | 会话权限默认拒绝、麦克风白名单、webview 挂载拦截 |
 | `src/quit-confirmation.js` | 首次隐藏确认、退出前后端状态确认 |
-| `lib/workspace-store.js` | 最近工作区持久化与去重 |
 | `lib/update-trust.js` | 更新清单 Ed25519 验签与信任配置 |
 | `lib/cli-install.js`、`lib/win-user-path.js` | `dsh` 命令安装与用户 PATH 读写 |
 | `lib/crash-reporter.js`、`lib/operation-log.js` | 崩溃报告与操作日志 |

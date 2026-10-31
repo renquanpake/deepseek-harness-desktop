@@ -139,44 +139,6 @@ function createUiMenus({
               }
             }
           },
-          {
-            label: t('menu.studio.openWorkspace'),
-            click: async () => {
-              const result = await actions.openWorkspaceDialog();
-              if (result && result.ok === false) {
-                dialog.showMessageBox(getMainWindow(), {
-                  type: 'error',
-                  title: t('dialog.workspace.title'),
-                  message: t('dialog.workspace.openFailed', { message: result.error || '' })
-                });
-              }
-            }
-          },
-          {
-            label: t('menu.studio.recentWorkspaces'),
-            submenu: (() => {
-              const current = getState().workspaceDir;
-              const recents = actions.getRecentWorkspaces();
-              if (!recents.length) {
-                return [{ label: t('menu.studio.recentEmpty'), enabled: false }];
-              }
-              return recents.map((entry) => ({
-                label: entry.path === current
-                  ? `${entry.name}  ${t('menu.studio.recentCurrent')}`
-                  : `${entry.name} — ${entry.path}`,
-                click: () => {
-                  actions.switchToWorkspace(entry.path);
-                }
-              }));
-            })()
-          },
-          {
-            label: t('menu.studio.removeRecent'),
-            click: () => {
-              actions.removeRecentWorkspace(getState().workspaceDir);
-              buildNativeAppMenu();
-            }
-          },
           { type: 'separator' },
           {
             label: t('menu.studio.pasteClipboard'),
@@ -362,69 +324,6 @@ function createUiMenus({
             click: async (item) => {
               setSafeMode(item.checked);
               await actions.restartWithCurrentConfig();
-            }
-          },
-          {
-            label: t('menu.engine.restorePresets'),
-            click: async () => {
-              actions.hydratePresetPlugins(true);
-              await actions.restartWithCurrentConfig();
-              const activeWindow = getMainWindow();
-              if (activeWindow) {
-                dialog.showMessageBox(activeWindow, {
-                  type: 'info',
-                  title: t('dialog.presetReset.title'),
-                  message: t('dialog.presetReset.message')
-                });
-              }
-            }
-          }
-        ]
-      },
-      {
-        label: t('menu.system.title'),
-        submenu: [
-          {
-            label: t('menu.system.registerContextMenu'),
-            click: () => {
-              const result = actions.registerContextMenu();
-              const activeWindow = getMainWindow();
-              if (result.total === 0) {
-                dialog.showMessageBox(activeWindow, {
-                  type: 'warning',
-                  title: t('dialog.contextMenu.title'),
-                  message: t('dialog.contextMenu.registerUnavailable')
-                });
-                return;
-              }
-              const ok = result.failed === 0;
-              dialog.showMessageBox(activeWindow, {
-                type: ok ? 'info' : 'warning',
-                title: t('dialog.contextMenu.title'),
-                message: ok
-                  ? t('dialog.contextMenu.registerSuccess', { ok: result.ok, total: result.total })
-                  : t('dialog.contextMenu.registerPartial', { ok: result.ok, total: result.total, failed: result.failed })
-              });
-            }
-          },
-          {
-            label: t('menu.system.unregisterContextMenu'),
-            click: () => {
-              const result = actions.unregisterContextMenu();
-              const activeWindow = getMainWindow();
-              if (result.total === 0) {
-                dialog.showMessageBox(activeWindow, {
-                  type: 'warning',
-                  title: t('dialog.contextMenu.title'),
-                  message: t('dialog.contextMenu.unregisterUnavailable')
-                });
-                return;
-              }
-              dialog.showMessageBox(activeWindow, {
-                type: 'info',
-                title: t('dialog.contextMenu.title'),
-                message: t('dialog.contextMenu.unregisterResult', { total: result.total, ok: result.ok, failed: result.failed })
-              });
             }
           },
           { type: 'separator' },

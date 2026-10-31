@@ -55,7 +55,6 @@ const { createCliInstaller } = require('./lib/cli-install');
 const { createWinUserPath } = require('./lib/win-user-path');
 const { ensureKeybindingFile } = require('./lib/keybindings');
 const { createCspViolationSink, isCspViolationMessage } = require('./lib/csp-report');
-const { createWorkspaceStore } = require('./lib/workspace-store');
 const { createShellUpdater } = require('./lib/shell-updater');
 const { createUpdateJournal, markInterruptedRuntime } = require('./lib/update-journal');
 const { createIpcActions } = require('./src/ipc-actions');
@@ -146,9 +145,6 @@ const operationLog = createOperationLog({ dir: path.join(USER_DATA_DIR, 'logs') 
 const BACKEND_CSP_MODE = normalizeCspMode(process.env.DSH_BACKEND_CSP || 'report');
 const shellUpdater = createShellUpdater({ appDir: __dirname });
 const updateJournal = createUpdateJournal({ dir: path.join(DSH_HOME, 'update-journal') });
-const workspaceStore = createWorkspaceStore({
-  filePath: path.join(USER_DATA_DIR, 'recent-workspaces.json')
-});
 const cspViolationSink = createCspViolationSink({
   append: (message) => operationLog.append('csp-violation', { message })
 });
@@ -299,47 +295,6 @@ function switchWorkspace(dir, worktreeSession) {
     activeWorktreeSession.worktreePath = worktreeSession.worktreePath;
     activeWorktreeSession.repoPath = worktreeSession.repoPath;
     activeWorktreeSession.branchName = worktreeSession.branchName;
-  }
-  const recentPath = targetWorkspaceIsWorktree
-    ? activeWorktreeSession.repoPath || dir
-    : dir;
-  workspaceStore.touch(recentPath);
-}
-
-async function switchToWorkspace(dir) {
-  try {
-    const resolved = path.resolve(dir);
-    if (resolved === path.resolve(targetWorkspaceDir)) {
-      return { ok: true, changed: false, dir: resolved };
-    }
-    switchWorkspace(resolved, null);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.setTitle(`DeepSeek Harness Studio — ${targetWorkspaceDir}`);
-    }
-    operationLog.append('workspace-switch', { dir: resolved });
-    const ready = await restartWithCurrentConfig();
-    return { ok: true, changed: true, ready, dir: resolved };
-  } catch (err) {
-    operationLog.append('workspace-switch-failed', { dir: String(dir), error: err.message });
-    return { ok: false, changed: false, error: err.message };
-  }
-}
-
-async function openWorkspaceDialog() {
-  try {
-    const options = {
-      title: t('dialog.workspace.title'),
-      properties: ['openDirectory']
-    };
-    const result = mainWindow
-      ? await dialog.showOpenDialog(mainWindow, options)
-      : await dialog.showOpenDialog(options);
-    if (!result || result.canceled || !result.filePaths || !result.filePaths[0]) {
-      return { ok: true, changed: false };
-    }
-    return await switchToWorkspace(result.filePaths[0]);
-  } catch (err) {
-    return { ok: false, changed: false, error: err.message };
   }
 }
 
@@ -645,10 +600,6 @@ const uiMenus = createUiMenus({
       app.relaunch();
       app.exit(0);
     },
-    getRecentWorkspaces: () => workspaceStore.list(),
-    openWorkspaceDialog,
-    switchToWorkspace,
-    removeRecentWorkspace: (dir) => workspaceStore.remove(dir),
     reloadKeybindings,
     requestQuit,
     getCliStatus: () => cliInstaller.status(),
@@ -872,9 +823,6 @@ app.whenReady().then(async () => {
       });
     }
   }
-  workspaceStore.touch(
-    targetWorkspaceIsWorktree ? activeWorktreeSession.repoPath || targetWorkspaceDir : targetWorkspaceDir
-  );
   protocolSetup.installBackendCsp();
   createSessionSecurity({ getAllowedOrigin: () => backend.getTargetUrl() }).install(session.defaultSession);
   createMainWindow();

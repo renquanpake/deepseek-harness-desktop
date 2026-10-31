@@ -9,12 +9,7 @@
       "newWorktree": "New Isolated Workspace Branch (Git Worktree)...",
       "pasteClipboard": "Paste Clipboard Screenshot/Text into Input (Alt+Shift+V)",
       "alwaysOnTop": "Always on Top (Floating Companion Mode)",
-      "autoStart": "Start on Login (Windows Login)",
-      "openWorkspace": "Open workspace…",
-      "recentWorkspaces": "Recent workspaces",
-      "recentEmpty": "(no recent workspaces)",
-      "recentCurrent": "(current)",
-      "removeRecent": "Remove current workspace from recents"
+      "autoStart": "Start on Login (Windows Login)"
     },
     "engine": {
       "title": "Engine & Updates",
@@ -27,7 +22,6 @@
       "winNative": "Engine: Windows Native Mode (Recommended, Fastest)",
       "wsl2": "Engine: WSL2 Compatibility Mode (For Linux-Dependent Tools)",
       "safeMode": "Troubleshooting Safe Mode (Temporarily Disable Third-Party Plugins)",
-      "restorePresets": "Restore Factory Preset Plugins (Reset UI Enhancement Components)",
       "updateShell": "Update shell code (git pull)"
     },
     "system": {
@@ -120,10 +114,6 @@
     "wsl2Unavailable": {
       "message": "The WSL2 engine is only available on Windows hosts."
     },
-    "presetReset": {
-      "title": "Preset Plugins Reset",
-      "message": "Factory preset plugin configuration has been force-restored and the workspace restarted!"
-    },
     "contextMenu": {
       "title": "Context Menu Integration",
       "registerUnavailable": "Context menu registration is only available on Windows hosts.",
@@ -169,10 +159,6 @@
       "reloaded": "Shortcuts reloaded. Current relay shortcut: {shortcut}",
       "invalid": "The shortcut configuration is invalid; defaults were restored.",
       "unavailable": "(registration failed, possibly taken by another app)"
-    },
-    "workspace": {
-      "title": "Open workspace",
-      "openFailed": "Failed to open workspace: {message}"
     },
     "shellCodeUpdate": {
       "title": "Update shell code",

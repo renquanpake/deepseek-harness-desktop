@@ -46,7 +46,6 @@
   * **解封熔断标记**：自动扫描并清除 `.broken-marker.json` 异常阻断。
   * **原生菜单一键体检**：在应用顶部菜单「引擎与更新」→「🩺 环境自动体检与自愈」中可随时一键体检并生成诊断报告。
   * **dsh 命令行一键注册**：在「Windows 系统集成」中安装或移除 `dsh` 命令，只改写当前用户 PATH 中对应的那一条。
-  * **工作区快速切换**：「工作台」菜单支持打开目录与最近工作区列表，最多保留 12 个，切换后自动重启后端。
 * **🧩 出厂官方增强插件深度合并 (`lib/preset-hydrator.js`)**：
   * 预置并自动激活 `dsh-codex-ui`（工作台增强）、`dshmarket`（插件市场）、`dsh-better-sidebar`、`dsh-pathlink`、`dsh-paste-input`、`dsh-checkpoint-rewind` 等全套体验。
 * **⚡ 国内双轨秒级热更 (`lib/updater.js`)**：
