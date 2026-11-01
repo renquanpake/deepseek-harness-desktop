@@ -105,6 +105,14 @@ WebView2 形态见 `webview2/`：WinForms + WebView2，约 350 行 C#，拉起�
 
 - 不实现官方桌面的 `dshDesktop.keyboard` / `dshDesktop.shortcuts` 原生桥。DSH 只有在 `dataset.platform` 存在时才走桌面快捷键路径；我们不设置该标记，DSH 使用自己的 Web 快捷键实现，功能完整且零重复。
 
+### 已实现
+
+- `lite/main.js`：单实例、单窗口、过渡页、拉起内核、解析认证 URL、关闭即退出
+- `lite/backend.js`：内核入口解析、能力探测缓存、`--port 0`、Token 捕获、超时与退出处理
+- `lite/log.js`：最小日志，写入 `$DSH_HOME/logs/lite.log`
+- 启动方式：`npm run start:lite`，或部署目录里的 `一键启动-轻量.bat`
+- 不注入 preload，DSH 以 Web 运行时工作，自带功能全部可用
+
 ## 5. 代码组织
 
 ```mermaid

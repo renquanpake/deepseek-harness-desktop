@@ -152,6 +152,10 @@ test('buildLaunchArgs honours probed capabilities', () => {
     buildLaunchArgs({ port: 3080, safeMode: true, capabilities: { supportsNoOpen: false, supportsPort: false } }),
     ['web', '--safe-mode']
   );
+  assert.deepStrictEqual(
+    buildLaunchArgs({ port: 0, capabilities: { supportsNoOpen: true, supportsPort: true } }),
+    ['web', '--no-open', '--port', '0']
+  );
 });
 
 test('probeWebCapabilities parses help output and tolerates failures', () => {

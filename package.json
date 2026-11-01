@@ -1,7 +1,7 @@
 {
   "name": "deepseek-harness-desktop",
   "productName": "DeepSeek Harness",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "DeepSeek Harness 桌面端外壳 - 原生 Windows 一体化装甲",
   "author": "renquanpake",
   "main": "main.js",
@@ -22,7 +22,8 @@
     "footprint": "node scripts/footprint.js",
     "runtime:prune": "node scripts/prune-runtime.js",
     "check:contract": "node scripts/check-upstream-contract.js",
-    "electron:prune": "node scripts/prune-electron.js"
+    "electron:prune": "node scripts/prune-electron.js",
+    "start:lite": "electron lite/main.js"
   },
   "dependencies": {},
   "devDependencies": {
